@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DigimonBot.Core\DigimonBot.Core.csproj" />
+    <ProjectReference Include="..\..\src\DigimonBot.AI\DigimonBot.AI.csproj" />
+    <ProjectReference Include="..\..\src\DigimonBot.Data\DigimonBot.Data.csproj" />
+  </ItemGroup>
+
+</Project>

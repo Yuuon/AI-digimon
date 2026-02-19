@@ -1,0 +1,66 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.Core", "src\DigimonBot.Core\DigimonBot.Core.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.AI", "src\DigimonBot.AI\DigimonBot.AI.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F23456789012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.Messaging", "src\DigimonBot.Messaging\DigimonBot.Messaging.csproj", "{C3D4E5F6-A7B8-9012-CDEF-345678901234}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.Data", "src\DigimonBot.Data\DigimonBot.Data.csproj", "{D4E5F6A7-B8C9-0123-DEF0-456789012345}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.Host", "src\DigimonBot.Host\DigimonBot.Host.csproj", "{E5F6A7B8-C9D0-1234-EF01-567890123456}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EvolutionEditor", "tools\EvolutionEditor\EvolutionEditor.csproj", "{F6A7B8C9-D0E1-2345-F012-678901234567}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{12345678-1234-1234-1234-123456789012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.Core.Tests", "tests\DigimonBot.Core.Tests\DigimonBot.Core.Tests.csproj", "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DigimonBot.AI.Tests", "tests\DigimonBot.AI.Tests\DigimonBot.AI.Tests.csproj", "{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F23456789012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F23456789012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F23456789012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F23456789012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-345678901234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-345678901234}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-345678901234}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-345678901234}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-456789012345}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-456789012345}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-456789012345}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-456789012345}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-567890123456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-567890123456}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-567890123456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-567890123456}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-678901234567}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-678901234567}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-678901234567}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-678901234567}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE} = {12345678-1234-1234-1234-123456789012}
+		{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF} = {12345678-1234-1234-1234-123456789012}
+	EndGlobalSection
+EndGlobal
