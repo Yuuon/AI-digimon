@@ -8,6 +8,7 @@
 - 🤖 **AI驱动对话**：接入DeepSeek等AI API，根据数码宝贝阶段和性格生成不同风格的回复
 - 📊 **情感分析**：AI自动分析对话内容，增加相应的情感属性值
 - 🔄 **轮回进化**：究极体之后会回到幼年期，开始新的旅程
+- 👥 **群聊模式**：支持各自培养（每人一只）或共同培养（全群一只）两种模式
 - 🎮 **指令系统**：支持状态查询、进化路线预览等指令
 - 🛠️ **可视化编辑器**：WPF工具方便编辑复杂的进化表
 
@@ -79,10 +80,12 @@ dotnet test --verbosity normal
 {
   "QQBot": {
     "NapCat": {
+      "BotQQ": 123456789,
       "ConnectionType": "WebSocketReverse",
       "WebSocketHost": "127.0.0.1",
       "WebSocketPort": 5140,
-      "HttpApiUrl": "http://127.0.0.1:3000"
+      "HttpApiUrl": "http://127.0.0.1:3000",
+      "GroupDigimonMode": "Separate"
     }
   },
   "AI": {
@@ -93,6 +96,12 @@ dotnet test --verbosity normal
     "TimeoutSeconds": 60,
     "Temperature": 0.8,
     "MaxTokens": 1000
+  },
+  "Data": {
+    "DigimonDatabasePath": "Data/digimon_database.json"
+  },
+  "Admin": {
+    "Whitelist": ["你的QQ号"]
   }
 }
 ```
@@ -169,6 +178,19 @@ NapCatQQ 需要单独安装和配置。请参考：
 
 ### 配置参数说明
 
+#### NapCatQQ 配置
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `BotQQ` | Bot的QQ号（用于识别@Bot的消息，**必填**） | 0 |
+| `ConnectionType` | 连接方式：`WebSocketReverse`/`HTTP` | `WebSocketReverse` |
+| `WebSocketHost` | WebSocket监听地址 | `127.0.0.1` |
+| `WebSocketPort` | WebSocket监听端口 | 5140 |
+| `HttpApiUrl` | NapCat HTTP API地址 | `http://127.0.0.1:3000` |
+| `GroupDigimonMode` | 群聊模式：`Separate`（各自培养）/`Shared`（共同培养） | `Separate` |
+
+#### AI 配置
+
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `Provider` | AI提供商类型 | `deepseek` |
@@ -178,6 +200,12 @@ NapCatQQ 需要单独安装和配置。请参考：
 | `TimeoutSeconds` | 请求超时时间 | 60 |
 | `Temperature` | 创造性参数(0-2) | 0.8 |
 | `MaxTokens` | 最大Token数 | 1000 |
+
+#### 管理配置
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `Whitelist` | 管理员QQ号列表（可使用 `/setemotion` 指令） | `[]` |
 
 ### 4. 运行Bot
 
@@ -193,6 +221,26 @@ dotnet publish src/DigimonBot.Host -c Release -o ./publish
 ```
 
 连接成功后控制台会显示 `Connected to NapCatQQ WebSocket successfully!`
+
+### 群聊模式说明
+
+`GroupDigimonMode` 配置项控制群聊中数码宝贝的养成方式：
+
+| 模式 | 说明 | 回复格式 |
+|------|------|----------|
+| `Separate` | **各自培养**（默认） | 每个群友有自己的数码兽，回复带前缀 `[昵称]的XX兽：` |
+| `Shared` | **共同培养** | 全群共同培养一只数码兽，回复不带前缀 |
+
+**Separate 模式示例：**
+```
+[小明]的亚古兽：你好呀！
+[小红]的亚古兽：今天天气不错！
+```
+
+**Shared 模式示例：**
+```
+亚古兽：大家好！
+```
 
 ## 项目结构
 
@@ -384,8 +432,14 @@ A: 可以。DeepSeekClient实现了OpenAI兼容接口，可以替换为其他API
 **Q: 群聊中如何触发Bot？**  
 A: 需要在消息中@Bot，或发送以`/`开头的指令。
 
+**Q: 群聊中每个人有自己的数码兽吗？**  
+A: 取决于 `GroupDigimonMode` 配置。`Separate` 模式下每人有自己的数码兽（带昵称前缀），`Shared` 模式下全群共同培养一只。
+
 **Q: NapCatQQ 和 Bot 必须运行在同一台机器上吗？**  
 A: 不需要。只要网络可达，NapCatQQ 和 Bot 可以运行在不同的服务器上。只需配置正确的 WebSocket 和 HTTP 地址即可。
+
+**Q: 如何查看/修改当前情感值？**  
+A: 使用 `/status` 查看当前状态。管理员可使用 `/setemotion` 指令调整情感值（需在 `Admin.Whitelist` 中配置QQ号）。
 
 ## 技术栈
 
