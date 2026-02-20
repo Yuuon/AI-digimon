@@ -1,0 +1,128 @@
+[
+  {
+    "id": "courage_cookie",
+    "name": "勇气饼干",
+    "description": "一块热气腾腾的饼干，吃了让人充满勇气。勇气+5",
+    "price": 50,
+    "type": "food",
+    "effects": {
+      "courage": 5
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "courage_steak",
+    "name": "勇气牛排",
+    "description": "超大份的牛排，吃了让人无所畏惧。勇气+15",
+    "price": 150,
+    "type": "food",
+    "effects": {
+      "courage": 15
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "friendship_candy",
+    "name": "友情糖果",
+    "description": "甜蜜的味道让人想起朋友。友情+5",
+    "price": 50,
+    "type": "food",
+    "effects": {
+      "friendship": 5
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "friendship_cake",
+    "name": "友情蛋糕",
+    "description": "与朋友分享的美味蛋糕。友情+15",
+    "price": 150,
+    "type": "food",
+    "effects": {
+      "friendship": 15
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "love_fruit",
+    "name": "爱心果实",
+    "description": "形状像爱心的甜美果实。爱心+5",
+    "price": 50,
+    "type": "food",
+    "effects": {
+      "love": 5
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "love_parfait",
+    "name": "爱心芭菲",
+    "description": "精致的甜品，充满了爱的味道。爱心+15",
+    "price": 150,
+    "type": "food",
+    "effects": {
+      "love": 15
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "knowledge_bread",
+    "name": "知识面包",
+    "description": "据说吃了会让人变聪明的面包。知识+5",
+    "price": 50,
+    "type": "food",
+    "effects": {
+      "knowledge": 5
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "knowledge_soup",
+    "name": "智慧浓汤",
+    "description": "用多种食材熬制而成，营养丰富。知识+15",
+    "price": 150,
+    "type": "food",
+    "effects": {
+      "knowledge": 15
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "balanced_bento",
+    "name": "均衡便当",
+    "description": "营养全面的便当，各种情感值+3",
+    "price": 200,
+    "type": "food",
+    "effects": {
+      "courage": 3,
+      "friendship": 3,
+      "love": 3,
+      "knowledge": 3
+    },
+    "stackable": true,
+    "maxStack": 99
+  },
+  {
+    "id": "feast_platter",
+    "name": "盛宴拼盘",
+    "description": "豪华大餐，各种情感值+10",
+    "price": 500,
+    "type": "food",
+    "effects": {
+      "courage": 10,
+      "friendship": 10,
+      "love": 10,
+      "knowledge": 10
+    },
+    "stackable": true,
+    "maxStack": 99
+  }
+]

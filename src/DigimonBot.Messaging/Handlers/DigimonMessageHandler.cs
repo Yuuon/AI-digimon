@@ -126,6 +126,26 @@ public class DigimonMessageHandler : IMessageHandler
         // 生成带群聊隔离的UserId
         var userId = GenerateUserId(context.UserId, context.GroupId);
 
+        // 处理查看他人数据的逻辑
+        string? targetUserId = null;
+        string? targetOriginalUserId = null;
+        
+        if (context.IsGroupMessage && args.Length > 0)
+        {
+            // 优先从@提及获取目标用户
+            if (context.MentionedUserIds.Count > 0)
+            {
+                targetOriginalUserId = context.MentionedUserIds[0];
+                targetUserId = GenerateUserId(targetOriginalUserId, context.GroupId);
+            }
+            // 否则尝试解析手动输入的QQ号
+            else if (long.TryParse(args[0], out var targetQQ))
+            {
+                targetOriginalUserId = targetQQ.ToString();
+                targetUserId = GenerateUserId(targetOriginalUserId, context.GroupId);
+            }
+        }
+
         var cmdContext = new CommandContext
         {
             UserId = userId,
@@ -135,7 +155,10 @@ public class DigimonMessageHandler : IMessageHandler
             Args = args,
             GroupId = context.GroupId,
             IsGroupMessage = context.IsGroupMessage,
-            ShouldAddPrefix = ShouldAddUserPrefix(context)
+            ShouldAddPrefix = ShouldAddUserPrefix(context),
+            MentionedUserIds = context.MentionedUserIds,
+            TargetUserId = targetUserId,
+            TargetOriginalUserId = targetOriginalUserId
         };
 
         var result = await command.ExecuteAsync(cmdContext);
@@ -176,8 +199,32 @@ public class DigimonMessageHandler : IMessageHandler
             {
                 try
                 {
+                    _logger.LogInformation("开始情感分析: User={UserId}, Message={Message}", userId, context.Content);
+                    
                     var emotionAnalysis = await _aiClient.AnalyzeEmotionAsync(context.Content, aiResponse.Content);
+                    
+                    _logger.LogInformation("情感分析完成: Courage={C}, Friendship={F}, Love={L}, Knowledge={K}",
+                        emotionAnalysis.CourageDelta, emotionAnalysis.FriendshipDelta, 
+                        emotionAnalysis.LoveDelta, emotionAnalysis.KnowledgeDelta);
+                    
+                    // 记录修改前的值
+                    var oldCourage = userDigimon.Emotions.Courage;
+                    var oldFriendship = userDigimon.Emotions.Friendship;
+                    var oldLove = userDigimon.Emotions.Love;
+                    var oldKnowledge = userDigimon.Emotions.Knowledge;
+                    
                     await _emotionTracker.ApplyEmotionAnalysisAsync(userDigimon, emotionAnalysis, "对话分析");
+                    
+                    _logger.LogInformation("情感值已修改: 勇气{OldC}->{NewC}, 友情{OldF}->{NewF}, 爱心{OldL}->{NewL}, 知识{OldK}->{NewK}",
+                        oldCourage, userDigimon.Emotions.Courage,
+                        oldFriendship, userDigimon.Emotions.Friendship,
+                        oldLove, userDigimon.Emotions.Love,
+                        oldKnowledge, userDigimon.Emotions.Knowledge);
+                    
+                    // 保存情感变化到数据库
+                    await _digimonManager.SaveAsync(userDigimon);
+                    
+                    _logger.LogInformation("情感变化已保存到数据库: User={UserId}", userId);
                     
                     // 发布情感变化事件
                     _eventPublisher.PublishEmotionChanged(new EmotionChangedEventArgs
@@ -196,7 +243,7 @@ public class DigimonMessageHandler : IMessageHandler
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in emotion analysis");
+                    _logger.LogError(ex, "情感分析异常: {Message}", ex.Message);
                 }
             });
 

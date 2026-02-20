@@ -1,6 +1,8 @@
 using DigimonBot.AI.Services;
 using DigimonBot.Core.Services;
+using DigimonBot.Data.Database;
 using DigimonBot.Data.Repositories;
+using DigimonBot.Data.Repositories.Sqlite;
 using DigimonBot.Host.Configs;
 using DigimonBot.Messaging.Commands;
 using DigimonBot.Messaging.Handlers;
@@ -39,11 +41,39 @@ public class Program
                     Directory.CreateDirectory(dataDir);
                 }
 
-                // 注册核心服务
+                // 注册核心配置数据仓库
                 services.AddSingleton<IDigimonRepository>(provider =>
                     new JsonDigimonRepository(settings.Data.DigimonDatabasePath));
                 
-                services.AddSingleton<IDigimonManager, InMemoryDigimonManager>();
+                services.AddSingleton<IItemRepository>(provider =>
+                    new JsonItemRepository(settings.Data.ItemsDatabasePath));
+
+                // 注册数据库初始化器
+                services.AddSingleton<DatabaseInitializer>(provider =>
+                    new DatabaseInitializer(settings.Data.SqliteConnectionString));
+
+                // 初始化数据库（创建表结构）
+                var dbInitializer = new DatabaseInitializer(settings.Data.SqliteConnectionString);
+                dbInitializer.Initialize();
+                services.AddSingleton(dbInitializer);
+
+                // 注册 SQLite 数据仓库
+                services.AddSingleton<IDigimonStateRepository, SqliteDigimonStateRepository>();
+                services.AddSingleton<IUserDataRepository, SqliteUserDataRepository>();
+                services.AddSingleton<IInventoryRepository, SqliteInventoryRepository>();
+
+                // 注册数码宝贝管理器（使用持久化实现）
+                services.AddSingleton<IDigimonManager>(provider =>
+                {
+                    var stateRepo = provider.GetRequiredService<IDigimonStateRepository>();
+                    var digimonRepo = provider.GetRequiredService<IDigimonRepository>();
+                    return new PersistentDigimonManager(
+                        stateRepo, 
+                        digimonRepo, 
+                        settings.Data.GoldTokenDivisor);
+                });
+
+                // 注册核心服务
                 services.AddSingleton<IEvolutionEngine, EvolutionEngine>();
                 services.AddSingleton<IEmotionTracker, EmotionTracker>();
                 services.AddSingleton<Core.Events.IEventPublisher, EventPublisher>();
@@ -74,6 +104,17 @@ public class Program
 
                 services.AddSingleton<IPersonalityEngine, PersonalityEngine>();
 
+                // 注册战斗服务
+                services.AddSingleton<IBattleService>(provider =>
+                {
+                    var aiClient = provider.GetRequiredService<IAIClient>();
+                    var logger = provider.GetRequiredService<ILogger<BattleService>>();
+                    return new BattleService(
+                        aiClient, 
+                        logger, 
+                        settings.Data.BattleProtectionSeconds);
+                });
+
                 // 注册命令
                 services.AddSingleton<CommandRegistry>(provider =>
                 {
@@ -81,9 +122,22 @@ public class Program
                     var digimonManager = provider.GetRequiredService<IDigimonManager>();
                     var repository = provider.GetRequiredService<IDigimonRepository>();
                     var evolutionEngine = provider.GetRequiredService<IEvolutionEngine>();
+                    var userDataRepository = provider.GetRequiredService<IUserDataRepository>();
+                    var inventoryRepository = provider.GetRequiredService<IInventoryRepository>();
+                    var itemRepository = provider.GetRequiredService<IItemRepository>();
 
-                    registry.Register(new StatusCommand(digimonManager, repository, evolutionEngine));
-                    registry.Register(new EvolutionPathCommand(digimonManager, repository, evolutionEngine));
+                    registry.Register(new StatusCommand(
+                        digimonManager, 
+                        repository, 
+                        evolutionEngine,
+                        settings.Admin,
+                        provider.GetRequiredService<ILogger<StatusCommand>>()));
+                    registry.Register(new EvolutionPathCommand(
+                        digimonManager, 
+                        repository, 
+                        evolutionEngine,
+                        settings.Admin,
+                        provider.GetRequiredService<ILogger<EvolutionPathCommand>>()));
                     registry.Register(new ResetCommand(digimonManager));
                     registry.Register(new HelpCommand(registry));
                     
@@ -97,7 +151,33 @@ public class Program
                         settings.Admin,
                         provider.GetRequiredService<ILogger<SetEmotionCommand>>()
                     ));
-                    // registry.Register(new SimpleJrrpCommand()); // 简单算法版本（可选）
+                    
+                    // 添加商店和背包指令
+                    registry.Register(new ShopCommand(
+                        itemRepository,
+                        userDataRepository,
+                        inventoryRepository,
+                        provider.GetRequiredService<ILogger<ShopCommand>>()));
+                    
+                    registry.Register(new InventoryCommand(
+                        inventoryRepository,
+                        itemRepository,
+                        digimonManager,
+                        provider.GetRequiredService<ILogger<InventoryCommand>>()));
+                    
+                    registry.Register(new UseItemCommand(
+                        inventoryRepository,
+                        itemRepository,
+                        digimonManager,
+                        provider.GetRequiredService<ILogger<UseItemCommand>>()));
+                    
+                    // 添加攻击指令
+                    registry.Register(new AttackCommand(
+                        digimonManager,
+                        provider.GetRequiredService<IDigimonStateRepository>(),
+                        repository,
+                        provider.GetRequiredService<IBattleService>(),
+                        provider.GetRequiredService<ILogger<AttackCommand>>()));
 
                     return registry;
                 });

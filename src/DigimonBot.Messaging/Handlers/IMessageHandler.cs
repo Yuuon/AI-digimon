@@ -23,6 +23,8 @@ public class MessageContext
     public bool IsGroupMessage { get; set; }
     public DateTime Timestamp { get; set; }
     public MessageSource Source { get; set; }
+    /// <summary>消息中@提及的用户ID列表（纯QQ号，不包含Bot）</summary>
+    public List<string> MentionedUserIds { get; set; } = new();
 }
 
 public enum MessageSource

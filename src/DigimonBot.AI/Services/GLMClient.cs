@@ -230,25 +230,9 @@ public class GLMClient : IAIClient
             // _logger.LogDebug("情感分析结果: C={C}, F={F}, L={L}, K={K}",
             //     emotionResult.CourageDelta, emotionResult.FriendshipDelta, emotionResult.LoveDelta, emotionResult.KnowledgeDelta);
             
-            // 保底措施：如果所有值都是0，随机给一个情感加 1-2 点
-            if (emotionResult.CourageDelta == 0 && emotionResult.FriendshipDelta == 0 && 
-                emotionResult.LoveDelta == 0 && emotionResult.KnowledgeDelta == 0)
-            {
-                var random = new Random();
-                var emotionType = random.Next(4);
-                var bonus = random.Next(1, 3);
-                
-                switch (emotionType)
-                {
-                    case 0: emotionResult.CourageDelta = bonus; break;
-                    case 1: emotionResult.FriendshipDelta = bonus; break;
-                    case 2: emotionResult.LoveDelta = bonus; break;
-                    case 3: emotionResult.KnowledgeDelta = bonus; break;
-                }
-                
-                // _logger.LogDebug("保底加成: {Emotion} +{Value}",
-                //     emotionType switch { 0 => "C", 1 => "F", 2 => "L", _ => "K" }, bonus);
-            }
+            // 注：已移除保底机制，情感值完全由AI分析决定
+            // 如果用户对话没有体现出情感变化，则不会增加情感值
+            // 金币奖励机制不受影响，仍然根据Token消耗发放
             
             return emotionResult;
         }

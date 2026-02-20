@@ -274,6 +274,9 @@ public class BotService : BackgroundService
         // 获取发送者昵称
         var userName = eventData.Sender?.Nickname ?? userId;
 
+        // 解析消息中的@提及（排除Bot自己）
+        var mentionedUserIds = ExtractMentionedUsers(eventData.Message, _botQQ);
+        
         // 构建消息上下文
         var context = new Messaging.Handlers.MessageContext
         {
@@ -283,7 +286,8 @@ public class BotService : BackgroundService
             GroupId = eventData.GroupId ?? 0,
             IsGroupMessage = messageType == "group",
             Timestamp = DateTime.Now,
-            Source = messageType == "group" ? Messaging.Handlers.MessageSource.Group : Messaging.Handlers.MessageSource.Private
+            Source = messageType == "group" ? Messaging.Handlers.MessageSource.Group : Messaging.Handlers.MessageSource.Private,
+            MentionedUserIds = mentionedUserIds
         };
 
         // 群聊特殊处理：检查是否@Bot或以/开头
@@ -420,6 +424,67 @@ public class BotService : BackgroundService
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// 提取消息中@的所有用户ID（排除Bot自己）
+    /// </summary>
+    private List<string> ExtractMentionedUsers(object? message, long botQQ)
+    {
+        var result = new List<string>();
+        if (message == null) return result;
+
+        if (message is JsonElement element && element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var segment in element.EnumerateArray())
+            {
+                if (segment.TryGetProperty("type", out var typeProp) && 
+                    typeProp.GetString() == "at")
+                {
+                    // 获取被@的QQ号
+                    long atQQ = 0;
+                    
+                    // 先尝试直接读取 qq 属性
+                    if (segment.TryGetProperty("qq", out var qqProp))
+                    {
+                        if (qqProp.ValueKind == JsonValueKind.Number)
+                        {
+                            atQQ = qqProp.GetInt64();
+                        }
+                        else if (qqProp.ValueKind == JsonValueKind.String)
+                        {
+                            var qqStr = qqProp.GetString();
+                            long.TryParse(qqStr, out atQQ);
+                        }
+                    }
+                    // 再尝试读取 data.qq 嵌套属性 (NapCat标准格式)
+                    else if (segment.TryGetProperty("data", out var dataProp) && 
+                             dataProp.ValueKind == JsonValueKind.Object)
+                    {
+                        if (dataProp.TryGetProperty("qq", out var nestedQqProp))
+                        {
+                            if (nestedQqProp.ValueKind == JsonValueKind.Number)
+                            {
+                                atQQ = nestedQqProp.GetInt64();
+                            }
+                            else if (nestedQqProp.ValueKind == JsonValueKind.String)
+                            {
+                                var qqStr = nestedQqProp.GetString();
+                                long.TryParse(qqStr, out atQQ);
+                            }
+                        }
+                    }
+                    
+                    // 排除Bot自己
+                    if (atQQ > 0 && atQQ != botQQ)
+                    {
+                        result.Add(atQQ.ToString());
+                    }
+                }
+            }
+        }
+
+        return result;
     }
 
     /// <summary>

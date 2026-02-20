@@ -149,6 +149,24 @@ public class DataConfig
 {
     /// <summary>数码宝贝数据库路径</summary>
     public string DigimonDatabasePath { get; set; } = "Data/digimon_database.json";
+    
+    /// <summary>物品数据库路径</summary>
+    public string ItemsDatabasePath { get; set; } = "Data/items_database.json";
+    
+    /// <summary>持久化提供程序：sqlite / memory</summary>
+    public string PersistenceProvider { get; set; } = "sqlite";
+    
+    /// <summary>SQLite 连接字符串</summary>
+    public string SqliteConnectionString { get; set; } = "Data Source=Data/bot_data.db";
+    
+    /// <summary>每 Token 获得的金币数（默认每10个token获得1金币）</summary>
+    public int GoldPerToken { get; set; } = 1;
+    
+    /// <summary>Token计算分母（实际金币 = Tokens / GoldTokenDivisor）</summary>
+    public int GoldTokenDivisor { get; set; } = 10;
+    
+    /// <summary>战斗保护时间（秒），默认5分钟</summary>
+    public int BattleProtectionSeconds { get; set; } = 300;
 }
 
 /// <summary>

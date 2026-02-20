@@ -52,4 +52,10 @@ public class CommandContext
     public bool IsGroupMessage { get; set; }
     /// <summary>是否需要添加用户前缀（各自培养模式）</summary>
     public bool ShouldAddPrefix { get; set; }
+    /// <summary>消息中@提及的用户ID列表（纯QQ号）</summary>
+    public List<string> MentionedUserIds { get; set; } = new();
+    /// <summary>目标用户ID（用于查看他人数据，带群聊隔离）</summary>
+    public string? TargetUserId { get; set; }
+    /// <summary>目标用户原始ID（纯QQ号）</summary>
+    public string? TargetOriginalUserId { get; set; }
 }
