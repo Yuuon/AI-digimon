@@ -61,6 +61,7 @@ public class Program
                 services.AddSingleton<IDigimonStateRepository, SqliteDigimonStateRepository>();
                 services.AddSingleton<IUserDataRepository, SqliteUserDataRepository>();
                 services.AddSingleton<IInventoryRepository, SqliteInventoryRepository>();
+                services.AddSingleton<ICheckInRepository, SqliteCheckInRepository>();
 
                 // 注册数码宝贝管理器（使用持久化实现）
                 services.AddSingleton<IDigimonManager>(provider =>
@@ -178,6 +179,17 @@ public class Program
                         repository,
                         provider.GetRequiredService<IBattleService>(),
                         provider.GetRequiredService<ILogger<AttackCommand>>()));
+                    
+                    // 添加签到指令
+                    registry.Register(new CheckInCommand(
+                        provider.GetRequiredService<ICheckInRepository>(),
+                        inventoryRepository,
+                        itemRepository,
+                        digimonManager,
+                        repository,
+                        provider.GetRequiredService<IAIClient>(),
+                        provider.GetRequiredService<IPersonalityEngine>(),
+                        provider.GetRequiredService<ILogger<CheckInCommand>>()));
 
                     return registry;
                 });

@@ -45,6 +45,7 @@ public class DatabaseInitializer
         CreateUserDigimonStateTable(connection);
         CreateUserInventoryTable(connection);
         CreatePurchaseRecordTable(connection);
+        CreateCheckInRecordTable(connection);
     }
 
     /// <summary>
@@ -135,6 +136,24 @@ public class DatabaseInitializer
         command.ExecuteNonQuery();
     }
 
+    private void CreateCheckInRecordTable(SqliteConnection connection)
+    {
+        const string sql = @"
+            CREATE TABLE IF NOT EXISTS CheckInRecord (
+                UserId TEXT PRIMARY KEY NOT NULL,
+                TotalCheckIns INTEGER NOT NULL DEFAULT 0,
+                ConsecutiveCheckIns INTEGER NOT NULL DEFAULT 0,
+                LastCheckInDate TEXT NOT NULL DEFAULT '',
+                HighTierRewards INTEGER NOT NULL DEFAULT 0
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_checkin_date ON CheckInRecord(LastCheckInDate);
+        ";
+
+        using var command = new SqliteCommand(sql, connection);
+        command.ExecuteNonQuery();
+    }
+
     /// <summary>
     /// 删除所有数据（重置数据库）
     /// </summary>
@@ -148,6 +167,7 @@ public class DatabaseInitializer
             DELETE FROM UserDigimonState;
             DELETE FROM UserInventory;
             DELETE FROM PurchaseRecord;
+            DELETE FROM CheckInRecord;
             VACUUM;
         ";
 
