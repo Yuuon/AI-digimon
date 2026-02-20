@@ -33,10 +33,10 @@ public class SetEmotionCommand : ICommand
 
     public async Task<CommandResult> ExecuteAsync(CommandContext context)
     {
-        // 白名单检查
-        if (!IsWhitelisted(context.UserId))
+        // 白名单检查（支持全局白名单和群特定白名单）
+        if (!IsWhitelisted(context.OriginalUserId, context.UserId))
         {
-            _logger.LogWarning("用户 {UserId} 尝试使用管理指令 {Command}，但不在白名单中", context.UserId, Name);
+            _logger.LogWarning("用户 {UserId} 尝试使用管理指令 {Command}，但不在白名单中", context.OriginalUserId, Name);
             return new CommandResult 
             { 
                 Success = false, 
@@ -163,15 +163,34 @@ public class SetEmotionCommand : ICommand
 
     /// <summary>
     /// 检查用户是否在白名单中
+    /// 支持两种格式：
+    /// 1. 纯QQ号（如 "123456"）- 全局白名单，所有群有效
+    /// 2. QQ号@群号（如 "123456@789"）- 仅在指定群有效
     /// </summary>
-    private bool IsWhitelisted(string userId)
+    private bool IsWhitelisted(string originalUserId, string scopedUserId)
     {
         if (_whitelist == null || _whitelist.Count == 0)
         {
             _logger.LogWarning("白名单为空，拒绝所有管理指令请求");
             return false;
         }
-        return _whitelist.Contains(userId);
+        
+        // 先检查是否在全局白名单中（纯QQ号）
+        if (_whitelist.Contains(originalUserId))
+        {
+            _logger.LogDebug("用户 {UserId} 在全局白名单中", originalUserId);
+            return true;
+        }
+        
+        // 再检查是否在特定群白名单中（QQ号@群号格式）
+        if (_whitelist.Contains(scopedUserId))
+        {
+            _logger.LogDebug("用户 {UserId} 在当前群的白名单中", scopedUserId);
+            return true;
+        }
+        
+        _logger.LogWarning("用户 {OriginalUserId} / {ScopedUserId} 不在白名单中", originalUserId, scopedUserId);
+        return false;
     }
 
     /// <summary>

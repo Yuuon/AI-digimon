@@ -1,5 +1,6 @@
 using DigimonBot.Core.Models;
 using DigimonBot.Core.Services;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace DigimonBot.Core.Tests.Services;
@@ -10,7 +11,7 @@ public class EmotionTrackerTests
 
     public EmotionTrackerTests()
     {
-        _tracker = new EmotionTracker();
+        _tracker = new EmotionTracker(LoggerFactory.Create(builder => { }).CreateLogger<EmotionTracker>());
     }
 
     [Fact]
