@@ -16,11 +16,16 @@ public interface IMessageHandler
 /// </summary>
 public class MessageContext
 {
+    /// <summary>用户ID（可能包含群聊隔离）</summary>
     public string UserId { get; set; } = "";
+    /// <summary>原始用户ID（纯QQ号）</summary>
+    public string OriginalUserId { get; set; } = "";
     public string UserName { get; set; } = "";
     public string Content { get; set; } = "";
-    public long GroupId { get; set; }
+    public long? GroupId { get; set; }
     public bool IsGroupMessage { get; set; }
+    /// <summary>消息中是否@了机器人</summary>
+    public bool IsMentioned { get; set; }
     public DateTime Timestamp { get; set; }
     public MessageSource Source { get; set; }
     /// <summary>消息中@提及的用户ID列表（纯QQ号，不包含Bot）</summary>

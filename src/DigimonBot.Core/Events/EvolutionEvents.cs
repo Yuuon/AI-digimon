@@ -40,6 +40,15 @@ public class EvolutionApproachingEventArgs : EventArgs
 }
 
 /// <summary>
+/// 酒馆自主发言事件参数
+/// </summary>
+public class TavernAutoSpeakEventArgs : EventArgs
+{
+    public long GroupId { get; set; }
+    public string Message { get; set; } = "";
+}
+
+/// <summary>
 /// 事件发布器接口
 /// </summary>
 public interface IEventPublisher
@@ -47,8 +56,10 @@ public interface IEventPublisher
     event EventHandler<EvolutionEventArgs>? OnEvolved;
     event EventHandler<EmotionChangedEventArgs>? OnEmotionChanged;
     event EventHandler<EvolutionApproachingEventArgs>? OnEvolutionApproaching;
+    event EventHandler<TavernAutoSpeakEventArgs>? OnTavernAutoSpeak;
     
     void PublishEvolution(EvolutionEventArgs args);
     void PublishEmotionChanged(EmotionChangedEventArgs args);
     void PublishEvolutionApproaching(EvolutionApproachingEventArgs args);
+    void PublishTavernAutoSpeak(TavernAutoSpeakEventArgs args);
 }

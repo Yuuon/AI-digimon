@@ -3,7 +3,9 @@ using DigimonBot.Core.Services;
 using DigimonBot.Data.Database;
 using DigimonBot.Data.Repositories;
 using DigimonBot.Data.Repositories.Sqlite;
+using DigimonBot.Data.Services;
 using DigimonBot.Host.Configs;
+using DigimonBot.Host.Services;
 using DigimonBot.Messaging.Commands;
 using DigimonBot.Messaging.Handlers;
 using Microsoft.Extensions.Configuration;
@@ -105,6 +107,36 @@ public class Program
 
                 services.AddSingleton<IPersonalityEngine, PersonalityEngine>();
 
+                // 注册识图服务
+                services.AddSingleton<IVisionService, VisionService>();
+                
+                // 注册图床上传服务
+                services.AddSingleton<IImageUploadService, ImageUploadService>();
+                
+                // 注册消息历史服务
+                services.AddSingleton<IMessageHistoryService, MessageHistoryService>();
+                
+                // 注册图片URL解析服务（由BotService实现）
+                // 注意：BotService是IHostedService，在Host启动后才可用
+                // 使用延迟解析避免循环依赖
+                services.AddSingleton<Core.Services.IImageUrlResolver>(provider => 
+                {
+                    // 从已注册的服务中获取BotService实例
+                    var botService = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+                        .OfType<BotService>()
+                        .FirstOrDefault();
+                    if (botService == null)
+                    {
+                        throw new InvalidOperationException("BotService not found. Make sure it's registered as a hosted service.");
+                    }
+                    return botService;
+                });
+                
+                // 注册酒馆相关服务
+                services.AddSingleton<ITavernCharacterParser, TavernCharacterParser>();
+                services.AddSingleton<ITavernService, TavernService>();
+                services.AddSingleton<IGroupChatMonitorService, GroupChatMonitorService>();
+
                 // 注册战斗服务
                 services.AddSingleton<IBattleService>(provider =>
                 {
@@ -190,6 +222,37 @@ public class Program
                         provider.GetRequiredService<IAIClient>(),
                         provider.GetRequiredService<IPersonalityEngine>(),
                         provider.GetRequiredService<ILogger<CheckInCommand>>()));
+                    
+                    // 添加识图指令（使用IServiceProvider延迟解析IImageUrlResolver）
+                    registry.Register(new WhatIsThisCommand(
+                        provider.GetRequiredService<IVisionService>(),
+                        provider.GetRequiredService<IMessageHistoryService>(),
+                        provider, // IServiceProvider用于延迟解析
+                        provider.GetRequiredService<ILogger<WhatIsThisCommand>>()));
+                    
+                    // 添加酒馆指令
+                    var tavernService = provider.GetRequiredService<ITavernService>();
+                    var adminConfig = settings.Admin;
+                    
+                    registry.Register(new TavernToggleCommand(
+                        tavernService, adminConfig,
+                        provider.GetRequiredService<ILogger<TavernToggleCommand>>()));
+                    
+                    registry.Register(new ListCharactersCommand(tavernService));
+                    
+                    registry.Register(new LoadCharacterCommand(
+                        tavernService,
+                        provider.GetRequiredService<ILogger<LoadCharacterCommand>>()));
+                    
+                    registry.Register(new TavernChatCommand(
+                        tavernService,
+                        provider.GetRequiredService<ILogger<TavernChatCommand>>()));
+                    
+                    // 添加监测状态调试指令
+                    registry.Register(new CheckMonitorCommand(
+                        provider.GetRequiredService<IGroupChatMonitorService>(),
+                        tavernService,
+                        provider.GetRequiredService<ILogger<CheckMonitorCommand>>()));
 
                     return registry;
                 });

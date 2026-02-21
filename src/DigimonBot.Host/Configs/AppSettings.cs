@@ -118,7 +118,13 @@ public class AIConfig
     
     /// <summary>最大Token数</summary>
     public int MaxTokens { get; set; } = 1000;
-
+    
+    /// <summary>
+    /// 识图模型配置（可选）
+    /// 如果配置，识图功能将使用此模型
+    /// </summary>
+    public VisionConfig? VisionModel { get; set; }
+    
     /// <summary>
     /// 转换为客户端配置对象
     /// </summary>
@@ -143,6 +149,24 @@ public class AIConfig
         "custom" => AIProvider.Custom,
         _ => AIProvider.DeepSeek
     };
+}
+
+/// <summary>
+/// 识图模型配置
+/// </summary>
+public class VisionConfig
+{
+    /// <summary>API基础URL</summary>
+    public string BaseUrl { get; set; } = "";
+    
+    /// <summary>模型名称，例如：glm-4v</summary>
+    public string Model { get; set; } = "";
+    
+    /// <summary>API密钥（可选，留空则使用主AI配置的密钥）</summary>
+    public string? ApiKey { get; set; }
+    
+    /// <summary>是否启用识图功能</summary>
+    public bool Enabled => !string.IsNullOrEmpty(BaseUrl) && !string.IsNullOrEmpty(Model);
 }
 
 public class DataConfig

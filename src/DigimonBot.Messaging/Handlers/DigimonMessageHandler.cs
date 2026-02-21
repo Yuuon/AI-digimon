@@ -23,6 +23,8 @@ public class DigimonMessageHandler : IMessageHandler
     private readonly IEventPublisher _eventPublisher;
     private readonly ILogger<DigimonMessageHandler> _logger;
     private readonly IGroupModeConfig _groupModeConfig;
+    private readonly ITavernService _tavernService;
+    private readonly IGroupChatMonitorService _groupChatMonitor;
 
     public DigimonMessageHandler(
         CommandRegistry commandRegistry,
@@ -34,7 +36,9 @@ public class DigimonMessageHandler : IMessageHandler
         IEmotionTracker emotionTracker,
         IEventPublisher eventPublisher,
         ILogger<DigimonMessageHandler> logger,
-        IGroupModeConfig groupModeConfig)
+        IGroupModeConfig groupModeConfig,
+        ITavernService tavernService,
+        IGroupChatMonitorService groupChatMonitor)
     {
         _commandRegistry = commandRegistry;
         _digimonManager = digimonManager;
@@ -46,6 +50,8 @@ public class DigimonMessageHandler : IMessageHandler
         _eventPublisher = eventPublisher;
         _logger = logger;
         _groupModeConfig = groupModeConfig;
+        _tavernService = tavernService;
+        _groupChatMonitor = groupChatMonitor;
     }
     
     /// <summary>
@@ -74,7 +80,38 @@ public class DigimonMessageHandler : IMessageHandler
             return await HandleCommandAsync(context, content);
         }
 
-        // 2. 处理AI对话
+        // 2. 群聊监测（酒馆模式下的关键词检测）
+        if (context.IsGroupMessage && context.GroupId.HasValue)
+        {
+            _groupChatMonitor.AddMessage(context.GroupId.Value, context.UserId, context.UserName, context.Content);
+            
+            // 如果酒馆模式激活、机器人被@，且消息以"/酒馆对话"开头，才处理酒馆对话
+            if (_tavernService.IsEnabled && context.IsMentioned && 
+                context.Content.TrimStart().StartsWith("/酒馆对话", StringComparison.OrdinalIgnoreCase))
+            {
+                return await HandleTavernConversationAsync(context);
+            }
+            
+            // 检查是否触发自主发言（酒馆模式下，关键词高频出现）
+            if (_tavernService.IsEnabled && _tavernService.HasCharacterLoaded())
+            {
+                var gid = context.GroupId.Value;
+                _logger.LogInformation("[自主发言] 准备检查群 {GroupId} 的触发条件", gid);
+                _ = Task.Run(async () => 
+                {
+                    try 
+                    {
+                        await CheckAndTriggerTavernAutoSpeakAsync(gid);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[自主发言] Task.Run 内异常: {Message}", ex.Message);
+                    }
+                });
+            }
+        }
+
+        // 3. 处理普通AI对话
         return await HandleAiConversationAsync(context);
     }
 
@@ -153,7 +190,7 @@ public class DigimonMessageHandler : IMessageHandler
             UserName = context.UserName,
             Message = content,
             Args = args,
-            GroupId = context.GroupId,
+            GroupId = context.GroupId ?? 0,
             IsGroupMessage = context.IsGroupMessage,
             ShouldAddPrefix = ShouldAddUserPrefix(context),
             MentionedUserIds = context.MentionedUserIds,
@@ -286,6 +323,58 @@ public class DigimonMessageHandler : IMessageHandler
         }
     }
 
+    private async Task<MessageResult> HandleTavernConversationAsync(MessageContext context)
+    {
+        if (!context.GroupId.HasValue)
+        {
+            return new MessageResult { Handled = false };
+        }
+
+        var groupId = context.GroupId.Value;
+        
+        try
+        {
+            _logger.LogInformation("处理酒馆对话: Group={GroupId}, User={UserId}", groupId, context.UserId);
+            
+            // 去除 "/酒馆对话" 前缀，获取实际对话内容
+            var dialogueContent = context.Content.TrimStart();
+            if (dialogueContent.StartsWith("/酒馆对话", StringComparison.OrdinalIgnoreCase))
+            {
+                dialogueContent = dialogueContent.Substring("/酒馆对话".Length).TrimStart();
+            }
+            
+            // 如果内容为空，给出提示
+            if (string.IsNullOrWhiteSpace(dialogueContent))
+            {
+                return new MessageResult 
+                { 
+                    Handled = true, 
+                    Response = "（你想对角色说什么呢？在/酒馆对话后面加上你想说的话吧~）"
+                };
+            }
+            
+            // 处理酒馆对话
+            var response = await _tavernService.GenerateResponseAsync(dialogueContent, context.UserName);
+            
+            _logger.LogInformation("酒馆对话响应: Group={GroupId}, Response={Response}", groupId, response);
+            
+            return new MessageResult
+            {
+                Handled = true,
+                Response = response
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "酒馆对话处理异常");
+            return new MessageResult 
+            { 
+                Handled = true, 
+                Response = "（角色似乎沉浸在自己的世界里，没有听到你的话...）"
+            };
+        }
+    }
+
     private async Task<EvolutionResult?> CheckEvolutionAsync(string userId, UserDigimon userDigimon)
     {
         var digimonDb = _repository.GetAll();
@@ -321,5 +410,58 @@ public class DigimonMessageHandler : IMessageHandler
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 检查并触发酒馆自主发言（关键词高频时）
+    /// </summary>
+    private async Task CheckAndTriggerTavernAutoSpeakAsync(long groupId)
+    {
+        try
+        {
+            _logger.LogInformation("[自主发言] 开始检查群 {GroupId}", groupId);
+            
+            // 先检查状态
+            var status = _groupChatMonitor.GetGroupStatus(groupId);
+            _logger.LogInformation("[自主发言] 群 {GroupId} 状态: 消息={Count}, 关键词={HasKeyword}, 冷却={Cooldown}", 
+                groupId, status.MessageCount, status.HasHighFreqKeyword, status.IsInCooldown);
+            
+            if (!status.CanTrigger)
+            {
+                _logger.LogInformation("[自主发言] 群 {GroupId} 不满足触发条件", groupId);
+                return;
+            }
+
+            _logger.LogInformation("[自主发言] 群 {GroupId} 满足触发条件，关键词: {Keywords}", 
+                groupId, string.Join(",", status.TopKeywords.Select(kv => $"{kv.Key}({kv.Value})")));
+
+            // 生成群聊总结
+            var summary = await _groupChatMonitor.GenerateSummaryAsync(groupId);
+            _logger.LogInformation("[自主发言] 群 {GroupId} 总结生成完成: {Summary}", groupId, summary[..Math.Min(50, summary.Length)]);
+            
+            // 生成角色回复
+            var keywords = string.Join(",", status.TopKeywords.Take(3).Select(kv => kv.Key));
+            var response = await _tavernService.GenerateSummaryResponseAsync(summary, keywords);
+            _logger.LogInformation("[自主发言] 群 {GroupId} 回复生成完成: {Response}", groupId, response[..Math.Min(50, response.Length)]);
+            
+            // 构建带角色名的回复
+            var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
+            var message = $"🎭 **{characterName}**（听到你们讨论得热烈，忍不住插话）\n\n{response}";
+            
+            _logger.LogInformation("[自主发言] 群 {GroupId} 准备发布事件", groupId);
+            
+            // 发布自主发言事件（由 BotService 监听并发送）
+            _eventPublisher.PublishTavernAutoSpeak(new TavernAutoSpeakEventArgs
+            {
+                GroupId = groupId,
+                Message = message
+            });
+            
+            _logger.LogInformation("[自主发言] 群 {GroupId} 事件已发布", groupId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[自主发言] 处理异常: {Message}", ex.Message);
+        }
     }
 }

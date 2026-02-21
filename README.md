@@ -9,7 +9,8 @@
 - 📊 **情感分析**：AI自动分析对话内容，增加相应的情感属性值
 - 🔄 **轮回进化**：究极体之后会回到幼年期，开始新的旅程
 - 👥 **群聊模式**：支持各自培养（每人一只）或共同培养（全群一只）两种模式
-- 🎮 **指令系统**：支持状态查询、进化路线预览等指令
+- 🎭 **酒馆系统**：支持 SillyTavern 角色卡，可进行角色扮演对话和自主发言
+- 🎮 **指令系统**：支持状态查询、进化路线预览、商店、背包等指令
 - 🛠️ **可视化编辑器**：WPF工具方便编辑复杂的进化表
 
 ## 部署
@@ -201,6 +202,29 @@ NapCatQQ 需要单独安装和配置。请参考：
 | `Temperature` | 创造性参数(0-2) | 0.8 |
 | `MaxTokens` | 最大Token数 | 1000 |
 
+#### 识图配置（可选）
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `VisionModel.BaseUrl` | 识图模型API地址 | 空（禁用识图） |
+| `VisionModel.Model` | 识图模型名称 | 空 |
+| `VisionModel.ApiKey` | 识图API密钥（可选，默认使用主AI密钥） | 空 |
+
+**识图配置示例（智谱GLM-4.6V）：**
+```json
+{
+  "AI": {
+    "Provider": "glm",
+    "ApiKey": "your-api-key",
+    "Model": "glm-4",
+    "VisionModel": {
+      "BaseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "Model": "glm-4.6v"
+    }
+  }
+}
+```
+
 #### 管理配置
 
 | 参数 | 说明 | 默认值 |
@@ -252,12 +276,12 @@ DigimonBot/
 │   │   ├── Services/          # 进化引擎、情感追踪器
 │   │   └── Events/            # 事件定义
 │   ├── DigimonBot.AI/        # AI相关服务
-│   │   └── Services/          # DeepSeek客户端、人格引擎
+│   │   └── Services/          # DeepSeek客户端、人格引擎、酒馆服务
 │   ├── DigimonBot.Data/      # 数据层
 │   │   ├── Database/          # 数据库初始化器
 │   │   └── Repositories/      # JSON仓库、SQLite仓库、持久化管理器
 │   ├── DigimonBot.Messaging/ # 消息处理
-│   │   ├── Commands/          # 指令系统（状态、商店、背包等）
+│   │   ├── Commands/          # 指令系统（状态、商店、背包、酒馆等）
 │   │   └── Handlers/          # 消息处理器
 │   └── DigimonBot.Host/      # 宿主程序
 │       └── Configs/           # 配置文件
@@ -266,7 +290,8 @@ DigimonBot/
 └── Data/
     ├── digimon_database.json  # 数码宝贝数据库
     ├── items_database.json    # 物品数据库
-    └── bot_data.db            # SQLite 用户数据数据库
+    ├── bot_data.db            # SQLite 用户数据数据库
+    └── Characters/            # 酒馆角色卡目录
 ```
 
 ## 指令列表
@@ -278,11 +303,17 @@ DigimonBot/
 | `/reset` | 重置, r | 重置数码宝贝，从蛋开始 |
 | `/attack` | 攻击, a, fight | 命令数码兽攻击目标（@用户 或 物体描述） |
 | `/checkin` | 签到, sign, 打卡 | 每日签到获得奖励并与数码宝贝互动 |
+| `/whatisthis` | 这是什么, 识图, img | 识别最近消息中的图片内容 |
 | `/jrrp` | 今日人品, 运势 | 查看今日人品值 |
 | `/setemotion` | 设置情感, emotion | 【管理员】修改情感值（白名单限定） |
 | `/shop` | 商店, buy | 查看商店商品或购买物品 |
 | `/inventory` | 背包, inv, i | 查看背包中的物品 |
 | `/use` | 使用, eat | 使用背包中的物品 |
+| `/tavern` | 酒馆 | 【管理员】开启/关闭酒馆模式 |
+| `/listchar` | 角色列表 | 查看可用角色卡 |
+| `/loadchar` | 加载角色 | 加载指定角色卡 |
+| `/tavernchat` | 酒馆对话, tc | 与当前角色对话 |
+| `/checkmonitor` | 监测状态 | 【调试】检查群聊监测状态 |
 | `/help` | 帮助, ? | 显示帮助信息 |
 
 ### 查看他人数据（群聊限定）
@@ -468,6 +499,57 @@ DigimonBot/
 - `love` / `爱心` - 增加爱心值
 - `knowledge` / `知识` - 增加知识值
 
+## 识图系统
+
+### 图片识别
+
+使用 `/这是什么` 指令识别图片内容：
+
+```bash
+/这是什么       # 分析最近消息中的图片
+/识图           # 同上
+/img            # 同上
+```
+
+### 使用方法
+
+1. **发送图片**到群里或私聊
+2. **发送指令** `/这是什么`
+3. Bot会分析图片并返回结果
+
+**注意**：
+- 会检查最近 **3条** 消息中的图片
+- 如果找不到图片，会提示发送图片后再使用指令
+- 需要配置识图模型才能使用
+
+### 配置要求
+
+需要在 `appsettings.json` 中配置支持视觉的AI模型：
+
+**智谱GLM-4V配置示例：**
+```json
+{
+  "AI": {
+    "VisionModel": {
+      "BaseUrl": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "Model": "glm-4v"
+    }
+  }
+}
+```
+
+**OpenAI GPT-4V配置示例：**
+```json
+{
+  "AI": {
+    "VisionModel": {
+      "BaseUrl": "https://api.openai.com/v1/chat/completions",
+      "Model": "gpt-4-vision-preview"
+    }
+  }
+}
+```
+
 ## 签到系统
 
 ### 每日签到
@@ -509,6 +591,88 @@ DigimonBot/
 - 每天只能签到一次
 - 连续签到断签后会重置为1天
 - 签到奖励的物品会自动存入背包
+
+## 酒馆系统（SillyTavern 兼容）
+
+酒馆系统允许加载 SillyTavern 格式的角色卡，进行角色扮演对话。支持 PNG 和 JSON 格式的角色卡。
+
+### 快速开始
+
+```bash
+# 1. 开启酒馆模式（管理员）
+/酒馆 on
+
+# 2. 查看可用角色
+/listchar
+
+# 3. 加载角色
+/loadchar 小琪
+
+# 4. 开始对话
+@Bot /酒馆对话 你好呀！
+```
+
+### 角色卡格式
+
+角色卡存放于 `Data/Characters/` 目录，支持：
+- **PNG 格式**：SillyTavern 导出的角色卡图片（包含元数据）
+- **JSON 格式**：纯文本角色定义文件
+
+**JSON 角色卡示例**：
+```json
+{
+  "name": "角色名称",
+  "description": "角色描述",
+  "personality": "性格特点",
+  "scenario": "场景设定",
+  "first_mes": "首次见面问候语",
+  "mes_example": "对话示例",
+  "tags": ["标签1", "标签2"]
+}
+```
+
+### 自主发言功能
+
+当群内讨论热烈时，角色会自动插入对话：
+
+**触发条件**：
+- 酒馆模式已开启
+- 已加载角色
+- 群内消息 ≥ 3 条
+- 某个关键词出现 ≥ 2 次
+- 不在冷却期（默认 5 分钟）
+
+**示例**：
+```
+用户A: 今天测试一下
+用户B: 测试这个功能
+用户C: 再测试一次
+
+→ 角色自动发言："（听到你们讨论得热烈，忍不住插话）关于测试，我有话要说..."
+```
+
+### 调试指令
+
+使用 `/监测状态` 检查当前群是否满足触发条件：
+
+```bash
+/checkmonitor      # 查看群聊监测状态
+/监测状态          # 同上
+```
+
+输出信息包括：
+- 酒馆模式状态
+- 角色加载状态
+- 消息记录数量
+- 关键词统计（Top 5）
+- 各项触发条件检查
+
+### 注意事项
+
+- 角色卡需符合 SillyTavern V2 规范
+- 自主发言触发后有 5 分钟冷却期
+- 酒馆对话与数码宝贝系统相互独立
+- 群内所有人共享同一个角色对话上下文
 
 ## 使用编辑器
 
@@ -622,7 +786,7 @@ A: 使用 `/status` 查看当前状态。管理员可使用 `/setemotion` 指令
 
 - **框架**: .NET 8, NapCatQQ (OneBot11协议)
 - **AI**: DeepSeek API (OpenAI兼容)
-- **数据**: JSON配置文件
+- **数据**: SQLite (用户数据), JSON (配置)
 - **编辑器**: WPF (.NET 8)
 
 ## 许可证

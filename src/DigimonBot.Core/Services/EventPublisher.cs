@@ -10,6 +10,7 @@ public class EventPublisher : IEventPublisher
     public event EventHandler<EvolutionEventArgs>? OnEvolved;
     public event EventHandler<EmotionChangedEventArgs>? OnEmotionChanged;
     public event EventHandler<EvolutionApproachingEventArgs>? OnEvolutionApproaching;
+    public event EventHandler<TavernAutoSpeakEventArgs>? OnTavernAutoSpeak;
 
     public void PublishEvolution(EvolutionEventArgs args)
     {
@@ -24,5 +25,10 @@ public class EventPublisher : IEventPublisher
     public void PublishEvolutionApproaching(EvolutionApproachingEventArgs args)
     {
         OnEvolutionApproaching?.Invoke(this, args);
+    }
+
+    public void PublishTavernAutoSpeak(TavernAutoSpeakEventArgs args)
+    {
+        OnTavernAutoSpeak?.Invoke(this, args);
     }
 }

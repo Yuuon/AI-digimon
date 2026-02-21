@@ -1,4 +1,5 @@
 using DigimonBot.Host.Configs;
+using DigimonBot.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
@@ -13,25 +14,38 @@ namespace DigimonBot.Host;
 /// NapCatQQ Bot 服务
 /// 通过 WebSocket 接收消息，通过 HTTP API 发送消息
 /// </summary>
-public class BotService : BackgroundService
+public class BotService : BackgroundService, Core.Services.IImageUrlResolver
 {
     private readonly ILogger<BotService> _logger;
     private readonly AppSettings _settings;
     private readonly Messaging.Handlers.IMessageHandler _messageHandler;
+    private readonly IMessageHistoryService _messageHistory;
     private readonly HttpClient _httpClient;
     private ClientWebSocket? _webSocket;
     private readonly CancellationTokenSource _reconnectCts = new();
     private bool _isRunning;
     private long _botQQ; // Bot 自己的 QQ 号
 
+    private readonly Core.Events.IEventPublisher _eventPublisher;
+    private readonly Core.Services.IGroupChatMonitorService _groupChatMonitor;
+    private readonly Core.Services.ITavernService _tavernService;
+
     public BotService(
         ILogger<BotService> logger,
         IOptions<AppSettings> settings,
-        Messaging.Handlers.IMessageHandler messageHandler)
+        Messaging.Handlers.IMessageHandler messageHandler,
+        IMessageHistoryService messageHistory,
+        Core.Events.IEventPublisher eventPublisher,
+        Core.Services.IGroupChatMonitorService groupChatMonitor,
+        Core.Services.ITavernService tavernService)
     {
         _logger = logger;
         _settings = settings.Value;
         _messageHandler = messageHandler;
+        _messageHistory = messageHistory;
+        _eventPublisher = eventPublisher;
+        _groupChatMonitor = groupChatMonitor;
+        _tavernService = tavernService;
         _httpClient = new HttpClient();
         
         // 从配置读取 Bot QQ 号
@@ -50,6 +64,20 @@ public class BotService : BackgroundService
         {
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_settings.QQBot.NapCat.HttpAccessToken}");
         }
+        
+        // 订阅酒馆自主发言事件
+        _eventPublisher.OnTavernAutoSpeak += async (sender, args) =>
+        {
+            try
+            {
+                _logger.LogInformation("收到酒馆自主发言事件: Group={GroupId}", args.GroupId);
+                await SendGroupMessageAsync(args.GroupId, args.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "发送酒馆自主发言消息失败");
+            }
+        };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -277,27 +305,36 @@ public class BotService : BackgroundService
         // 解析消息中的@提及（排除Bot自己）
         var mentionedUserIds = ExtractMentionedUsers(eventData.Message, _botQQ);
         
-        // 构建消息上下文
-        var context = new Messaging.Handlers.MessageContext
+        // 提取图片信息
+        var (imageUrl, imageFile) = ExtractImageInfo(eventData.Message);
+        
+        // 记录消息历史
+        _messageHistory.AddMessage(userId, eventData.GroupId ?? 0, new MessageEntry
         {
-            UserId = userId,
-            UserName = userName,
             Content = content,
-            GroupId = eventData.GroupId ?? 0,
-            IsGroupMessage = messageType == "group",
+            Type = string.IsNullOrEmpty(imageUrl) && string.IsNullOrEmpty(imageFile) ? "text" : "image",
+            ImageUrl = imageUrl,
+            ImageFile = imageFile,
             Timestamp = DateTime.Now,
-            Source = messageType == "group" ? Messaging.Handlers.MessageSource.Group : Messaging.Handlers.MessageSource.Private,
-            MentionedUserIds = mentionedUserIds
-        };
-
-        // 群聊特殊处理：检查是否@Bot或以/开头
-        if (context.IsGroupMessage)
+            IsFromBot = false,
+            RawData = eventData.Message
+        });
+        
+        // 群聊监测：记录所有群消息（在过滤之前，确保监测到所有消息）
+        if (messageType == "group" && eventData.GroupId.HasValue)
         {
-            // _logger.LogDebug("群聊消息，检查触发条件...");
+            _groupChatMonitor.AddMessage(eventData.GroupId.Value, userId, userName, content);
             
-            bool isAtBot = false;
-            bool isCommand = false;
-            
+            // 检查是否触发酒馆自主发言（在过滤之前，确保普通消息也能触发）
+            _ = Task.Run(async () => await CheckTavernAutoSpeakAsync(eventData.GroupId.Value));
+        }
+        
+        // 群聊特殊处理：检查是否@Bot或以/开头
+        bool isAtBot = false;
+        bool isCommand = false;
+        
+        if (messageType == "group")
+        {
             try
             {
                 isAtBot = IsAtBot(eventData.Message, _botQQ);
@@ -309,18 +346,30 @@ public class BotService : BackgroundService
                 return;
             }
             
-            // _logger.LogDebug("isAtBot={IsAtBot}, isCommand={IsCommand}", isAtBot, isCommand);
-            
             if (!isAtBot && !isCommand) return; // 忽略不相关的群消息
 
             // 去除@的文本
             if (isAtBot)
             {
                 content = RemoveAtContent(content, _botQQ);
-                context.Content = content;
                 // _logger.LogDebug("去除@后的内容: '{Content}'", content);
             }
         }
+
+        // 构建消息上下文
+        var context = new Messaging.Handlers.MessageContext
+        {
+            UserId = userId,
+            OriginalUserId = userId,
+            UserName = userName,
+            Content = content,
+            GroupId = eventData.GroupId,
+            IsGroupMessage = messageType == "group",
+            IsMentioned = isAtBot,
+            Timestamp = DateTime.Now,
+            Source = messageType == "group" ? Messaging.Handlers.MessageSource.Group : Messaging.Handlers.MessageSource.Private,
+            MentionedUserIds = mentionedUserIds
+        };
 
         _logger.LogInformation("[{Source}] {User}: {Content}", 
             context.IsGroupMessage ? $"Group {context.GroupId}" : "Private",
@@ -340,9 +389,9 @@ public class BotService : BackgroundService
                 _logger.LogInformation("Sending response: {Response}", result.Response);
                 
                 // 发送回复
-                if (context.IsGroupMessage)
+                if (context.IsGroupMessage && context.GroupId.HasValue)
                 {
-                    await SendGroupMessageAsync(context.GroupId, result.Response);
+                    await SendGroupMessageAsync(context.GroupId.Value, result.Response);
                 }
                 else
                 {
@@ -354,9 +403,9 @@ public class BotService : BackgroundService
                 {
                     await Task.Delay(500);
                     
-                    if (context.IsGroupMessage)
+                    if (context.IsGroupMessage && context.GroupId.HasValue)
                     {
-                        await SendGroupMessageAsync(context.GroupId, result.EvolutionMessage);
+                        await SendGroupMessageAsync(context.GroupId.Value, result.EvolutionMessage);
                     }
                     else
                     {
@@ -485,6 +534,135 @@ public class BotService : BackgroundService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 提取消息中的图片信息
+    /// </summary>
+    private (string? Url, string? File) ExtractImageInfo(object? message)
+    {
+        if (message == null) return (null, null);
+
+        if (message is JsonElement element && element.ValueKind == JsonValueKind.Array)
+        {
+            _logger.LogDebug("[ExtractImageInfo] 开始解析消息数组，共{Count}个segment", element.GetArrayLength());
+            
+            foreach (var segment in element.EnumerateArray())
+            {
+                if (segment.TryGetProperty("type", out var typeProp))
+                {
+                    var segType = typeProp.GetString();
+                    _logger.LogDebug("[ExtractImageInfo] 找到segment类型: {Type}", segType);
+                    
+                    if (segType == "image")
+                    {
+                        // 尝试获取图片URL (NapCat格式: data.url)
+                        if (segment.TryGetProperty("data", out var dataProp) && 
+                            dataProp.ValueKind == JsonValueKind.Object)
+                        {
+                            string? url = null;
+                            string? file = null;
+                            
+                            // 获取 url 字段
+                            if (dataProp.TryGetProperty("url", out var urlProp))
+                            {
+                                url = urlProp.GetString();
+                                _logger.LogDebug("[ExtractImageInfo] 找到url: {Url}", url);
+                            }
+                            
+                            // 获取 file 字段（用于后续调用get_image API）
+                            if (dataProp.TryGetProperty("file", out var fileProp))
+                            {
+                                file = fileProp.GetString();
+                                _logger.LogInformation("[ExtractImageInfo] 找到图片file: {File}", file);
+                            }
+                            
+                            // 也尝试从path字段获取
+                            if (string.IsNullOrEmpty(file) && dataProp.TryGetProperty("path", out var pathProp))
+                            {
+                                file = pathProp.GetString();
+                                _logger.LogInformation("[ExtractImageInfo] 从path找到file: {File}", file);
+                            }
+                            
+                            if (!string.IsNullOrEmpty(url) || !string.IsNullOrEmpty(file))
+                            {
+                                _logger.LogInformation("[ExtractImageInfo] 成功提取图片信息: Url={Url}, File={File}", url, file);
+                                return (url, file);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[ExtractImageInfo] image segment没有data属性");
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            _logger.LogDebug("[ExtractImageInfo] 消息不是数组类型或为空: {Type}", message?.GetType()?.Name);
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>
+    /// 获取图片的真实下载URL（调用NapCat get_image API）
+    /// </summary>
+    public async Task<string?> ResolveImageUrlAsync(string file)
+    {
+        try
+        {
+            var url = $"{_settings.QQBot.NapCat.HttpApiUrl}/get_image";
+            var payload = new { file = file };
+            var json = JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            
+            _logger.LogInformation("[ResolveImageUrl] 调用get_image API: File={File}, Url={ApiUrl}", file, url);
+            
+            var response = await _httpClient.PostAsync(url, content);
+            var responseJson = await response.Content.ReadAsStringAsync();
+            
+            _logger.LogInformation("[ResolveImageUrl] API响应: Status={Status}, Body={Body}", 
+                response.StatusCode, responseJson);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("[ResolveImageUrl] get_image API调用失败: {Status}", response.StatusCode);
+                return null;
+            }
+            
+            using var doc = JsonDocument.Parse(responseJson);
+            var root = doc.RootElement;
+            
+            // 尝试获取 data.url
+            if (root.TryGetProperty("data", out var data))
+            {
+                _logger.LogDebug("[ResolveImageUrl] 找到data字段: {Data}", data);
+                
+                if (data.TryGetProperty("url", out var urlProp))
+                {
+                    var result = urlProp.GetString();
+                    _logger.LogInformation("[ResolveImageUrl] 成功获取图片URL: {Url}", result);
+                    return result;
+                }
+                else
+                {
+                    _logger.LogWarning("[ResolveImageUrl] data中未找到url字段");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("[ResolveImageUrl] 响应中未找到data字段");
+            }
+            
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[ResolveImageUrl] 获取图片URL失败");
+            return null;
+        }
     }
 
     /// <summary>
@@ -632,6 +810,53 @@ public class BotService : BackgroundService
         _reconnectCts.Dispose();
 
         await base.StopAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// 检查并触发酒馆自主发言
+    /// </summary>
+    private async Task CheckTavernAutoSpeakAsync(long groupId)
+    {
+        try
+        {
+            // 检查酒馆状态
+            if (!_tavernService.IsEnabled || !_tavernService.HasCharacterLoaded())
+            {
+                return;
+            }
+
+            _logger.LogInformation("[BotService] 检查群 {GroupId} 自主发言条件", groupId);
+
+            // 获取监测状态
+            var status = _groupChatMonitor.GetGroupStatus(groupId);
+            _logger.LogInformation("[BotService] 群 {GroupId} 状态: 消息={Count}, 关键词={HasKeyword}, 冷却={Cooldown}", 
+                groupId, status.MessageCount, status.HasHighFreqKeyword, status.IsInCooldown);
+
+            if (!status.CanTrigger)
+            {
+                return;
+            }
+
+            _logger.LogInformation("[BotService] 群 {GroupId} 满足触发条件，开始生成回复", groupId);
+
+            // 生成总结和回复
+            var summary = await _groupChatMonitor.GenerateSummaryAsync(groupId);
+            var keywords = string.Join(",", status.TopKeywords.Take(3).Select(kv => kv.Key));
+            var response = await _tavernService.GenerateSummaryResponseAsync(summary, keywords);
+
+            var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
+            var message = $"🎭 **{characterName}**（听到你们讨论得热烈，忍不住插话）\n\n{response}";
+
+            _logger.LogInformation("[BotService] 群 {GroupId} 发送自主发言", groupId);
+            await SendGroupMessageAsync(groupId, message);
+            
+            // 记录触发时间，启动冷却
+            _groupChatMonitor.RecordTriggerTime(groupId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[BotService] 自主发言检查异常");
+        }
     }
 }
 

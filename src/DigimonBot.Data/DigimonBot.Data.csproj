@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DigimonBot.Core\DigimonBot.Core.csproj" />
+    <ProjectReference Include="..\DigimonBot.AI\DigimonBot.AI.csproj" />
   </ItemGroup>
 
 </Project>
