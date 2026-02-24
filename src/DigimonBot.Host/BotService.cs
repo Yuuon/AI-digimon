@@ -29,6 +29,10 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     private readonly Core.Events.IEventPublisher _eventPublisher;
     private readonly Core.Services.IGroupChatMonitorService _groupChatMonitor;
     private readonly Core.Services.ITavernService _tavernService;
+    private readonly Core.Services.ITavernConfigService _tavernConfigService;
+    
+    // 特别关注用户冷却时间记录：Key = "{groupId}:{userId}"
+    private readonly Dictionary<string, DateTime> _specialFocusCooldown = new();
 
     public BotService(
         ILogger<BotService> logger,
@@ -37,7 +41,8 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         IMessageHistoryService messageHistory,
         Core.Events.IEventPublisher eventPublisher,
         Core.Services.IGroupChatMonitorService groupChatMonitor,
-        Core.Services.ITavernService tavernService)
+        Core.Services.ITavernService tavernService,
+        Core.Services.ITavernConfigService tavernConfigService)
     {
         _logger = logger;
         _settings = settings.Value;
@@ -46,6 +51,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         _eventPublisher = eventPublisher;
         _groupChatMonitor = groupChatMonitor;
         _tavernService = tavernService;
+        _tavernConfigService = tavernConfigService;
         _httpClient = new HttpClient();
         
         // 从配置读取 Bot QQ 号
@@ -344,6 +350,13 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             {
                 _logger.LogError(ex, "检查触发条件时出错");
                 return;
+            }
+            
+            // 特别关注检查（在过滤之前，但需要知道是否@Bot）
+            if (eventData.GroupId.HasValue)
+            {
+                _ = Task.Run(async () => await CheckSpecialFocusAsync(
+                    eventData.GroupId.Value, userId, userName, content, isAtBot));
             }
             
             if (!isAtBot && !isCommand) return; // 忽略不相关的群消息
@@ -839,13 +852,22 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
 
             _logger.LogInformation("[BotService] 群 {GroupId} 满足触发条件，开始生成回复", groupId);
 
+            // 检查是否启用自主发言
+            if (!_tavernConfigService.Config.AutoSpeak.Enabled)
+            {
+                _logger.LogInformation("[BotService] 自主发言已禁用");
+                return;
+            }
+
             // 生成总结和回复
             var summary = await _groupChatMonitor.GenerateSummaryAsync(groupId);
             var keywords = string.Join(",", status.TopKeywords.Take(3).Select(kv => kv.Key));
             var response = await _tavernService.GenerateSummaryResponseAsync(summary, keywords);
 
+            // 使用配置中的消息模板
             var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
-            var message = $"🎭 **{characterName}**（听到你们讨论得热烈，忍不住插话）\n\n{response}";
+            var messagePrefix = _tavernConfigService.Config.AutoSpeak.MessagePrefix;
+            var message = messagePrefix.Replace("{CharacterName}", characterName) + response;
 
             _logger.LogInformation("[BotService] 群 {GroupId} 发送自主发言", groupId);
             await SendGroupMessageAsync(groupId, message);
@@ -856,6 +878,91 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         catch (Exception ex)
         {
             _logger.LogError(ex, "[BotService] 自主发言检查异常");
+        }
+    }
+
+    /// <summary>
+    /// 检查特别关注用户发言
+    /// </summary>
+    private async Task CheckSpecialFocusAsync(long groupId, string userId, string userName, string content, bool isAtBot)
+    {
+        try
+        {
+            var config = _tavernConfigService.Config.SpecialFocus;
+            
+            // 检查是否启用特别关注
+            if (!config.Enabled)
+            {
+                return;
+            }
+            
+            // 检查酒馆状态
+            if (!_tavernService.IsEnabled || !_tavernService.HasCharacterLoaded())
+            {
+                return;
+            }
+            
+            // 检查是否@Bot（如果配置要求）
+            if (config.RequireMention && !isAtBot)
+            {
+                return;
+            }
+            
+            // 检查用户是否在特别关注列表中
+            // 支持两种格式：纯QQ号 或 QQ号@groupId
+            var isFocused = config.UserIds.Any(id => 
+                id == userId || 
+                id == $"{userId}@g{groupId}" ||
+                id == $"{userId}@{groupId}");
+            
+            if (!isFocused)
+            {
+                return;
+            }
+            
+            _logger.LogInformation("[特别关注] 检测到关注用户发言: Group={GroupId}, User={User}, Content={Content}", 
+                groupId, userName, content.Length > 20 ? content[..20] + "..." : content);
+            
+            // 检查冷却时间
+            var cooldownKey = $"{groupId}:{userId}";
+            if (_specialFocusCooldown.TryGetValue(cooldownKey, out var lastTime))
+            {
+                var elapsed = DateTime.Now - lastTime;
+                var cooldown = TimeSpan.FromMinutes(config.CooldownMinutes);
+                if (elapsed < cooldown)
+                {
+                    var remaining = (int)(cooldown - elapsed).TotalSeconds;
+                    _logger.LogInformation("[特别关注] 用户 {User} 处于冷却期，剩余 {Remaining} 秒", userName, remaining);
+                    return;
+                }
+            }
+            
+            _logger.LogInformation("[特别关注] 为用户 {User} 生成回复", userName);
+            
+            // 构建提示词
+            var scenario = config.ScenarioTemplate
+                .Replace("{UserName}", userName)
+                .Replace("{Message}", content);
+            
+            // 调用AI生成回复
+            var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
+            var response = await _tavernService.GenerateResponseAsync(scenario, userName);
+            
+            // 构建消息
+            var messagePrefix = config.MessagePrefix
+                .Replace("{CharacterName}", characterName)
+                .Replace("{UserName}", userName);
+            var message = messagePrefix + response;
+            
+            _logger.LogInformation("[特别关注] 发送回复给 {User}", userName);
+            await SendGroupMessageAsync(groupId, message);
+            
+            // 记录冷却时间
+            _specialFocusCooldown[cooldownKey] = DateTime.Now;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[特别关注] 处理异常");
         }
     }
 }

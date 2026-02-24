@@ -116,6 +116,13 @@ public class Program
                 // 注册消息历史服务
                 services.AddSingleton<IMessageHistoryService, MessageHistoryService>();
                 
+                // 注册酒馆配置服务（需要先于其他酒馆服务注册）
+                services.AddSingleton<ITavernConfigService>(provider => 
+                {
+                    var logger = provider.GetRequiredService<ILogger<TavernConfigService>>();
+                    return new TavernConfigService(logger, "Data/tavern_config.json");
+                });
+                
                 // 注册图片URL解析服务（由BotService实现）
                 // 注意：BotService是IHostedService，在Host启动后才可用
                 // 使用延迟解析避免循环依赖
@@ -253,6 +260,18 @@ public class Program
                         provider.GetRequiredService<IGroupChatMonitorService>(),
                         tavernService,
                         provider.GetRequiredService<ILogger<CheckMonitorCommand>>()));
+                    
+                    // 添加重载酒馆配置指令
+                    registry.Register(new ReloadTavernConfigCommand(
+                        provider.GetRequiredService<ITavernConfigService>(),
+                        adminConfig,
+                        provider.GetRequiredService<ILogger<ReloadTavernConfigCommand>>()));
+                    
+                    // 添加特别关注管理指令
+                    registry.Register(new SpecialFocusCommand(
+                        provider.GetRequiredService<ITavernConfigService>(),
+                        adminConfig,
+                        provider.GetRequiredService<ILogger<SpecialFocusCommand>>()));
 
                     return registry;
                 });

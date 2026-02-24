@@ -1,0 +1,39 @@
+{
+  "Monitor": {
+    "MaxMessageCount": 20,
+    "MinMessageCount": 5,
+    "KeywordThreshold": 3,
+    "TriggerIntervalMinutes": 5,
+    "MinKeywordLength": 2,
+    "MaxKeywordLength": 5,
+    "StopWords": [
+      "的", "了", "是", "我", "你", "他", "她", "它", "们",
+      "在", "有", "和", "就", "都", "而", "及", "与", "或",
+      "但是", "一个", "没有", "这个", "那个", "可以", "的话",
+      "还是", "或者", "如果", "因为", "所以", "虽然", "一下"
+    ]
+  },
+  "AutoSpeak": {
+    "Enabled": true,
+    "MessagePrefix": "",
+    "ScenarioTemplate": "群聊正在讨论：{Keywords}，请根据这个话题插话参与讨论",
+    "MinIntervalSeconds": 300
+  },
+  "Generation": {
+    "SummaryPromptTemplate": "请总结以下群聊对话的主要内容：\n\n{Conversation}\n\n请用2-3句话简洁概括讨论的主题和要点。",
+    "SummaryMaxTokens": 200,
+    "ResponseMaxTokens": 500,
+    "Temperature": 0.8,
+    "MaxHistoryLength": 20
+  },
+  "SpecialFocus": {
+    "Enabled": false,
+    "UserIds": [],
+    "CooldownMinutes": 3,
+    "RequireMention": false,
+    "MessagePrefix": "",
+    "ScenarioTemplate": "{UserName}对你说：{Message}\n\n请根据这段话进行回复。注意保持你的人设和性格特点，回复要自然、有针对性。"
+  },
+  "CharacterDirectory": "Data/Characters",
+  "EnableDebugLog": true
+}

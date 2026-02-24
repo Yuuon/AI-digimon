@@ -13,20 +13,28 @@ public class TavernService : ITavernService
     private readonly ITavernCharacterParser _characterParser;
     private readonly IAIClient _aiClient;
     private readonly ILogger<TavernService> _logger;
+    private readonly ITavernConfigService _configService;
     private bool _isEnabled;
     private TavernCharacter? _currentCharacter;
     private readonly List<ChatMessage> _conversationHistory = new();
-    private const int MaxHistoryLength = 20;
+
+    // 从配置读取最大历史长度
+    private int MaxHistoryLength => _configService.Config.Generation.MaxHistoryLength;
 
     public TavernService(
         ITavernCharacterParser characterParser,
         IAIClient aiClient,
-        ILogger<TavernService> logger)
+        ILogger<TavernService> logger,
+        ITavernConfigService configService)
     {
         _characterParser = characterParser;
         _aiClient = aiClient;
         _logger = logger;
-        CharacterDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "Characters");
+        _configService = configService;
+        
+        // 从配置读取角色目录
+        CharacterDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, 
+            _configService.Config.CharacterDirectory);
         
         // 确保角色目录存在
         if (!Directory.Exists(CharacterDirectory))
@@ -225,16 +233,11 @@ public class TavernService : ITavernService
 
         try
         {
-            // 构建针对群聊总结的特殊提示词
-            var prompt = $"""
-                你正在一个群聊中观察大家的对话。
-                
-                最近大家讨论的话题总结：{summary}
-                关键词：{keywords}
-                
-                请根据你的人设，针对这个话题发表你的看法或参与讨论。
-                你的回应应该自然、符合你的性格特点。
-                """;
+            // 从配置读取场景模板
+            var scenarioTemplate = _configService.Config.AutoSpeak.ScenarioTemplate;
+            var prompt = scenarioTemplate
+                .Replace("{Summary}", summary)
+                .Replace("{Keywords}", keywords);
 
             var systemPrompt = BuildSystemPrompt("群友");
             

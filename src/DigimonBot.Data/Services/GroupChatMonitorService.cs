@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using DigimonBot.AI.Services;
 using DigimonBot.Core.Models;
+using DigimonBot.Core.Models.Tavern;
 using DigimonBot.Core.Services;
 using Microsoft.Extensions.Logging;
 
@@ -16,17 +17,25 @@ public class GroupChatMonitorService : IGroupChatMonitorService
     private readonly ConcurrentDictionary<long, DateTime> _lastTriggerTime = new();
     private readonly IAIClient _aiClient;
     private readonly ILogger<GroupChatMonitorService> _logger;
-    
-    private const int MaxMessageCount = 20;
-    private const int MinTriggerIntervalMinutes = 5; // 最少5分钟触发一次
-    private const int KeywordThreshold = 2; // 关键词出现2次以上视为高频
+    private readonly ITavernConfigService _configService;
+
+    // 当前配置（通过配置服务获取）
+    private MonitorConfig Config => _configService.Config.Monitor;
 
     public GroupChatMonitorService(
         IAIClient aiClient,
-        ILogger<GroupChatMonitorService> logger)
+        ILogger<GroupChatMonitorService> logger,
+        ITavernConfigService configService)
     {
         _aiClient = aiClient;
         _logger = logger;
+        _configService = configService;
+
+        // 订阅配置变更事件
+        _configService.OnConfigChanged += (_, _) =>
+        {
+            _logger.LogInformation("[监测服务] 配置已重新加载");
+        };
     }
 
     public void AddMessage(long groupId, string userId, string userName, string content)
@@ -46,8 +55,8 @@ public class GroupChatMonitorService : IGroupChatMonitorService
                 Timestamp = DateTime.Now
             });
             
-            // 只保留最近的消息
-            if (messages.Count > MaxMessageCount)
+            // 只保留最近的消息（从配置读取）
+            if (messages.Count > Config.MaxMessageCount)
             {
                 messages.RemoveAt(0);
             }
@@ -58,15 +67,16 @@ public class GroupChatMonitorService : IGroupChatMonitorService
 
     public (bool shouldTrigger, string keywords, string summary)? CheckForTrigger(long groupId)
     {
-        if (!_groupMessages.TryGetValue(groupId, out var messages) || messages.Count < 3)
+        // 从配置读取最小消息数
+        if (!_groupMessages.TryGetValue(groupId, out var messages) || messages.Count < Config.MinMessageCount)
         {
             return null;
         }
 
-        // 检查触发间隔
+        // 检查触发间隔（从配置读取）
         if (_lastTriggerTime.TryGetValue(groupId, out var lastTime))
         {
-            if (DateTime.Now - lastTime < TimeSpan.FromMinutes(MinTriggerIntervalMinutes))
+            if (DateTime.Now - lastTime < TimeSpan.FromMinutes(Config.TriggerIntervalMinutes))
             {
                 return null;
             }
@@ -81,8 +91,8 @@ public class GroupChatMonitorService : IGroupChatMonitorService
                 return null;
             }
 
-            // 检查是否有高频关键词
-            var highFreqKeywords = keywords.Where(kvp => kvp.Value >= KeywordThreshold).ToList();
+            // 检查是否有高频关键词（从配置读取阈值）
+            var highFreqKeywords = keywords.Where(kvp => kvp.Value >= Config.KeywordThreshold).ToList();
             if (highFreqKeywords.Count == 0)
             {
                 return null;
@@ -161,7 +171,7 @@ public class GroupChatMonitorService : IGroupChatMonitorService
             {
                 var keywords = ExtractKeywords(messages);
                 status.TopKeywords = keywords.OrderByDescending(kvp => kvp.Value).Take(5).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-                status.HasHighFreqKeyword = keywords.Any(kvp => kvp.Value >= KeywordThreshold);
+                status.HasHighFreqKeyword = keywords.Any(kvp => kvp.Value >= Config.KeywordThreshold);
             }
         }
         else
@@ -174,7 +184,7 @@ public class GroupChatMonitorService : IGroupChatMonitorService
         if (_lastTriggerTime.TryGetValue(groupId, out var lastTime))
         {
             var elapsed = DateTime.Now - lastTime;
-            var cooldown = TimeSpan.FromMinutes(MinTriggerIntervalMinutes);
+            var cooldown = TimeSpan.FromMinutes(Config.TriggerIntervalMinutes);
             if (elapsed < cooldown)
             {
                 status.IsInCooldown = true;
@@ -182,8 +192,8 @@ public class GroupChatMonitorService : IGroupChatMonitorService
             }
         }
         
-        // 检查是否可以触发（基本条件）
-        status.CanTrigger = status.MessageCount >= 3 && 
+        // 检查是否可以触发（基本条件，从配置读取）
+        status.CanTrigger = status.MessageCount >= Config.MinMessageCount && 
                            status.HasHighFreqKeyword && 
                            !status.IsInCooldown;
         
@@ -194,7 +204,7 @@ public class GroupChatMonitorService : IGroupChatMonitorService
     {
         _lastTriggerTime[groupId] = DateTime.Now;
         _logger.LogInformation("[监测服务] 群 {GroupId} 触发时间已记录，开始 {Minutes} 分钟冷却", 
-            groupId, MinTriggerIntervalMinutes);
+            groupId, Config.TriggerIntervalMinutes);
     }
 
     /// <summary>
@@ -221,7 +231,8 @@ public class GroupChatMonitorService : IGroupChatMonitorService
             foreach (var token in tokens)
             {
                 var word = token.Trim();
-                if (word.Length < 2 || word.Length > 10) continue;
+                // 从配置读取关键词长度限制
+                if (word.Length < Config.MinKeywordLength || word.Length > Config.MaxKeywordLength) continue;
                 if (IsStopWord(word)) continue;
                 candidates.Add(word);
             }
@@ -241,7 +252,8 @@ public class GroupChatMonitorService : IGroupChatMonitorService
                 }
             }
             
-            if (count >= 2) // 至少2条消息包含这个词
+            // 从配置读取阈值
+            if (count >= Config.KeywordThreshold)
             {
                 wordCounts[candidate] = count;
             }
@@ -254,11 +266,10 @@ public class GroupChatMonitorService : IGroupChatMonitorService
     }
 
     /// <summary>
-    /// 判断是否停用词
+    /// 判断是否停用词（使用配置中的停用词列表）
     /// </summary>
     private bool IsStopWord(string word)
     {
-        var stopWords = new[] { "的", "了", "是", "我", "你", "他", "她", "它", "们", "在", "有", "和", "就", "都", "而", "及", "与", "或", "但是", "一个", "没有", "这个", "那个" };
-        return stopWords.Contains(word) || word.All(char.IsDigit);
+        return Config.StopWords.Contains(word) || word.All(char.IsDigit);
     }
 }
