@@ -52,7 +52,7 @@ public class KimiCommand : ICommand
                 };
             }
 
-            var args = context.Args;
+            var args = context.Args ?? Array.Empty<string>();
             if (args.Length == 0)
             {
                 return GetHelpResult();
@@ -102,10 +102,15 @@ public class KimiCommand : ICommand
                 return false;
 
             // read-only = 允许读取操作（默认放行，具体限制在执行时判断）
-            return true;
+            if (string.Equals(config.NonWhitelistAccess, "read-only", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // 未知的NonWhitelistAccess值，安全默认拒绝
+            return false;
         }
 
-        return true;
+        // 未知的访问模式，安全默认拒绝
+        return false;
     }
 
     /// <summary>

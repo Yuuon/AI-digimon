@@ -66,9 +66,9 @@ public class KimiRepositoryManager : IKimiRepositoryManager
             Directory.CreateDirectory(repoPath);
 
             // 初始化git仓库
-            await RunGitCommandAsync(repoPath, $"init --initial-branch={_defaultBranch}");
-            await RunGitCommandAsync(repoPath, "config user.email \"kimi-bot@digimon.local\"");
-            await RunGitCommandAsync(repoPath, "config user.name \"Kimi Bot\"");
+            await RunGitCommandAsync(repoPath, "init", "--initial-branch", _defaultBranch);
+            await RunGitCommandAsync(repoPath, "config", "user.email", "kimi-bot@digimon.local");
+            await RunGitCommandAsync(repoPath, "config", "user.name", "Kimi Bot");
 
             // 创建README
             var readmePath = Path.Combine(repoPath, "README.md");
@@ -84,8 +84,8 @@ public class KimiRepositoryManager : IKimiRepositoryManager
             await File.WriteAllTextAsync(readmePath, readmeContent);
 
             // 提交README
-            await RunGitCommandAsync(repoPath, "add .");
-            await RunGitCommandAsync(repoPath, "commit -m \"Initial commit: Create repository\"");
+            await RunGitCommandAsync(repoPath, "add", ".");
+            await RunGitCommandAsync(repoPath, "commit", "-m", "Initial commit: Create repository");
 
             // 保存到数据库
             var repo = await _repository.CreateAsync(name, repoPath);
@@ -146,14 +146,13 @@ public class KimiRepositoryManager : IKimiRepositoryManager
     }
 
     /// <summary>
-    /// 在仓库目录中执行git命令
+    /// 在仓库目录中执行git命令（使用安全的参数列表方式）
     /// </summary>
-    private async Task<string> RunGitCommandAsync(string workingDirectory, string arguments)
+    private async Task<string> RunGitCommandAsync(string workingDirectory, params string[] arguments)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "git",
-            Arguments = arguments,
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -161,10 +160,15 @@ public class KimiRepositoryManager : IKimiRepositoryManager
             CreateNoWindow = true
         };
 
+        foreach (var arg in arguments)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
         using var process = Process.Start(psi);
         if (process == null)
         {
-            throw new InvalidOperationException("无法启动git进程");
+            throw new InvalidOperationException($"无法启动git进程: git {string.Join(" ", arguments)}");
         }
 
         var outputTask = process.StandardOutput.ReadToEndAsync();
@@ -174,7 +178,7 @@ public class KimiRepositoryManager : IKimiRepositoryManager
         if (!completed)
         {
             process.Kill();
-            throw new TimeoutException($"Git命令超时: git {arguments}");
+            throw new TimeoutException($"Git命令超时: git {string.Join(" ", arguments)}");
         }
 
         var output = await outputTask;
@@ -183,7 +187,7 @@ public class KimiRepositoryManager : IKimiRepositoryManager
         if (process.ExitCode != 0)
         {
             _logger.LogWarning("[KimiRepoManager] Git命令失败: git {Args}, ExitCode: {Code}, Error: {Error}",
-                arguments, process.ExitCode, error);
+                string.Join(" ", arguments), process.ExitCode, error);
             throw new InvalidOperationException($"Git命令失败 (exit code {process.ExitCode}): {error}");
         }
 

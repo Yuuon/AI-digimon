@@ -325,12 +325,16 @@ public class Program
                         provider.GetRequiredService<IKimiRepositoryManager>(),
                         provider.GetRequiredService<IKimiExecutionService>(),
                         provider.GetRequiredService<IKimiRepositoryRepository>(),
-                        () => new KimiCommandConfig
+                        () =>
                         {
-                            AccessMode = kimiConfigSvc.CurrentConfig.AccessControl.Mode,
-                            Whitelist = kimiConfigSvc.CurrentConfig.AccessControl.Whitelist,
-                            NonWhitelistAccess = kimiConfigSvc.CurrentConfig.AccessControl.NonWhitelistAccess,
-                            DefaultTimeoutSeconds = kimiConfigSvc.CurrentConfig.Execution.DefaultTimeoutSeconds
+                            var currentCfg = kimiConfigSvc.CurrentConfig;
+                            return new KimiCommandConfig
+                            {
+                                AccessMode = currentCfg.AccessControl.Mode,
+                                Whitelist = new List<string>(currentCfg.AccessControl.Whitelist),
+                                NonWhitelistAccess = currentCfg.AccessControl.NonWhitelistAccess,
+                                DefaultTimeoutSeconds = currentCfg.Execution.DefaultTimeoutSeconds
+                            };
                         },
                         provider.GetRequiredService<ILogger<KimiCommand>>()));
 
