@@ -71,18 +71,26 @@ public class CustomCommandRepository : ICustomCommandRepository
     {
         using var connection = _database.CreateConnection();
 
+        // Use LIKE for initial filter, then verify exact match via JSON deserialization
         const string sql = @"
             SELECT Id, Name, Aliases, BinaryPath, OwnerUserId, RequiresWhitelist, Description, CreatedAt, LastUsedAt, UseCount
             FROM CustomCommands
             WHERE Aliases LIKE '%""' || @Alias || '""%'
         ";
 
-        var row = await connection.QueryFirstOrDefaultAsync<CustomCommandRow>(sql, new { Alias = alias });
+        var rows = await connection.QueryAsync<CustomCommandRow>(sql, new { Alias = alias });
 
-        if (row == null)
-            return null;
+        // Post-filter: verify exact alias match (LIKE may produce false positives for substrings)
+        foreach (var row in rows)
+        {
+            var entity = MapToEntity(row);
+            if (entity.Aliases.Any(a => string.Equals(a, alias, StringComparison.OrdinalIgnoreCase)))
+            {
+                return entity;
+            }
+        }
 
-        return MapToEntity(row);
+        return null;
     }
 
     public async Task<bool> ExistsAsync(string name, string[]? aliases = null)

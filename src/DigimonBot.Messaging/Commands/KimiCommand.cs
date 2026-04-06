@@ -333,7 +333,9 @@ public class KimiCommand : ICommand
             };
         }
 
-        var sessionInfo = _currentSessionId != null ? $"\n当前会话: {_currentSessionId[..Math.Min(8, _currentSessionId.Length)]}" : "\n当前会话: 无（将自动创建）";
+        var sessionInfo = _currentSessionId != null
+            ? $"\n当前会话: {TruncateSessionId(_currentSessionId)}"
+            : "\n当前会话: 无（将自动创建）";
 
         return new CommandResult
         {
@@ -651,6 +653,14 @@ public class KimiCommand : ICommand
         return elapsed.TotalMinutes >= 1
             ? $"{(int)elapsed.TotalMinutes}分{elapsed.Seconds}秒"
             : $"{elapsed.Seconds}秒";
+    }
+
+    /// <summary>
+    /// 截断会话ID用于显示
+    /// </summary>
+    private static string TruncateSessionId(string sessionId)
+    {
+        return sessionId.Length > 8 ? sessionId[..8] + "..." : sessionId;
     }
 
     /// <summary>
