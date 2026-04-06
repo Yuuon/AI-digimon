@@ -1,0 +1,40 @@
+{
+  "_comment_AccessControl": "访问控制配置 - 控制谁可以使用Kimi功能",
+  "AccessControl": {
+    "_comment_Mode": "访问模式：open（所有人可访问）/ whitelist（仅白名单可访问）",
+    "Mode": "open",
+    "_comment_Whitelist": "白名单用户ID列表，这些用户始终拥有完整权限",
+    "Whitelist": [],
+    "_comment_NonWhitelistAccess": "非白名单用户访问权限：read-only（只读）/ restricted（完全禁止）",
+    "NonWhitelistAccess": "read-only"
+  },
+  "_comment_Execution": "执行配置 - 控制Kimi CLI的执行参数",
+  "Execution": {
+    "_comment_KimiCliPath": "Kimi CLI 路径，默认使用系统PATH中的kimi命令",
+    "KimiCliPath": "kimi",
+    "_comment_DefaultTimeoutSeconds": "默认执行超时时间（秒），超过此时间会终止进程",
+    "DefaultTimeoutSeconds": 300,
+    "_comment_MaxTimeoutSeconds": "最大允许的超时时间（秒），用户请求不能超过此值",
+    "MaxTimeoutSeconds": 600,
+    "_comment_BasePath": "Kimi工作空间基础路径，所有仓库将创建在此目录下",
+    "BasePath": "./kimi-workspace"
+  },
+  "_comment_Output": "输出配置 - 控制消息输出格式和长度",
+  "Output": {
+    "_comment_DefaultMode": "默认输出模式：summary（摘要模式）/ full（完整输出）",
+    "DefaultMode": "summary",
+    "_comment_MaxSummaryLength": "摘要模式下的最大输出长度（字符数）",
+    "MaxSummaryLength": 1000,
+    "_comment_MaxMessageLength": "单条消息的最大长度（字符数），超过会截断",
+    "MaxMessageLength": 2000,
+    "_comment_IncludeCloneUrl": "是否在输出中包含Git克隆URL",
+    "IncludeCloneUrl": true
+  },
+  "_comment_Git": "Git配置 - 控制Git相关行为",
+  "Git": {
+    "_comment_AutoCommit": "是否在每次执行后自动提交更改",
+    "AutoCommit": true,
+    "_comment_DefaultBranch": "新仓库的默认分支名称",
+    "DefaultBranch": "main"
+  }
+}
