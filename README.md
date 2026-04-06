@@ -12,6 +12,8 @@
 - 🎭 **酒馆系统**：支持 SillyTavern 角色卡，可进行角色扮演对话和自主发言
 - 🎮 **指令系统**：支持状态查询、进化路线预览、商店、背包等指令
 - 🛠️ **可视化编辑器**：WPF工具方便编辑复杂的进化表
+- 💻 **Kimi AI 代码助手**：集成 Kimi CLI，支持 AI 辅助编程、仓库管理、多会话管理
+- 🔧 **自定义命令系统**：通过 AI 代理注册自定义可执行命令，扩展 Bot 功能
 
 ## 部署
 
@@ -321,6 +323,8 @@ DigimonBot/
 | `/reloadpersonality` | 重载性格配置, reloadp | 【管理员】重新加载性格配置文件 |
 | `/reloaddialogue` | 重载对话配置, reloadd | 【管理员】重新加载对话配置文件 |
 | `/help` | 帮助, ? | 显示帮助信息 |
+| `/kimi` | kimichat, kimi助手 | Kimi AI 代码助手 |
+| `/customcmds` | customs, cmds | 列出所有自定义命令 |
 
 ### 查看他人数据（群聊限定）
 
@@ -369,6 +373,168 @@ DigimonBot/
   }
 }
 ```
+
+## Kimi AI 代码助手
+
+Kimi 代码助手集成了 Kimi CLI（kimi-cli），通过 HTTP API 提供 AI 辅助编程能力。用户可以在群聊中通过 `/kimi` 命令与 AI 进行代码对话，AI 可以在独立的 Git 仓库中读写文件、执行代码操作。
+
+### 前置要求
+
+1. 安装 Kimi CLI：`pip install kimi-cli`
+2. 完成登录配置：`kimi login`
+3. 启动 Kimi Web 服务：`kimi web --port 5494 --no-open`
+
+### 配置
+
+在 `appsettings.json` 中配置 Kimi 相关参数：
+
+```json
+{
+  "Kimi": {
+    "AccessControl": {
+      "Mode": "open",
+      "Whitelist": ["你的QQ号"],
+      "NonWhitelistAccess": "read-only"
+    },
+    "Execution": {
+      "KimiCliPath": "kimi",
+      "DefaultTimeoutSeconds": 300,
+      "BasePath": "./kimi-workspace",
+      "KimiWebBaseUrl": "http://127.0.0.1:5494",
+      "KimiWebPort": 5494,
+      "AutoManageKimiWeb": false
+    },
+    "Git": {
+      "AutoCommit": true,
+      "EnableHttpServer": false,
+      "HttpPort": 9418,
+      "DefaultBranch": "main"
+    }
+  }
+}
+```
+
+### 仓库管理
+
+Kimi 助手使用独立的 Git 仓库来存放代码。每个仓库有独立的工作目录和会话。
+
+```bash
+# 创建新仓库
+/kimi --new-repo my-project
+
+# 列出所有仓库
+/kimi --list-repos
+
+# 切换到指定仓库
+/kimi --switch-repo my-project
+
+# 查看当前仓库信息
+/kimi --current-repo
+```
+
+### 会话管理
+
+会话由 Kimi 服务管理，每个会话保持独立的对话上下文。同一仓库下的消息会自动复用会话以保持上下文连贯。
+
+```bash
+# 列出当前仓库的所有会话
+/kimi --list-sessions
+
+# 切换到指定会话（支持 ID 前缀匹配）
+/kimi --switch-session abc123
+```
+
+**会话行为说明：**
+- 首次发送消息时自动创建新会话
+- 后续消息自动复用同一会话（保持上下文）
+- 切换仓库或创建新仓库时，会话自动重置
+- 可以通过 `--switch-session` 手动切回之前的会话
+
+### Agent 任务管理
+
+```bash
+# 查看当前 Agent 执行状态
+/kimi --status
+
+# 中断正在运行的任务
+/kimi --cancel
+```
+
+### 使用示例
+
+```bash
+# 创建一个项目并开始编码
+/kimi --new-repo my-project
+/kimi 用Python写一个Hello World程序
+
+# AI 会在仓库中创建文件并自动提交 Git
+# 后续消息保持上下文
+/kimi 给这个程序添加命令行参数支持
+
+# 切换到另一个项目
+/kimi --switch-repo another-project
+/kimi 分析这个项目的代码结构
+
+# 回到之前的项目（需要手动切换会话以恢复上下文）
+/kimi --switch-repo my-project
+/kimi --list-sessions
+/kimi --switch-session abc123
+/kimi 继续之前的工作
+```
+
+### 访问控制
+
+| 模式 | 说明 |
+|------|------|
+| `open` | 所有人都可以使用 |
+| `whitelist` | 仅白名单用户可执行，非白名单用户根据 `NonWhitelistAccess` 设置决定权限 |
+
+`NonWhitelistAccess` 选项：
+- `read-only`：非白名单用户只能使用查询类命令（--list-repos, --current-repo 等）
+- `restricted`：非白名单用户完全无法使用
+
+## 自定义命令系统
+
+通过 Kimi AI 代理，用户可以创建自定义可执行命令并注册到 Bot 中。
+
+### 工作原理
+
+1. 用户通过 `/kimi` 请求创建命令
+2. AI 代理编写代码、编译二进制
+3. AI 代理将命令信息写入 SQLite 数据库
+4. Bot 在收到命令时自动查找并执行注册的二进制
+
+### 使用自定义命令
+
+```bash
+# 列出所有自定义命令
+/customcmds
+
+# 执行自定义命令
+/<command-name> [参数...]
+```
+
+### 创建自定义命令
+
+通过 Kimi 助手创建：
+
+```bash
+/kimi 创建一个名为 hello 的命令，收到消息后回复 Hello World
+```
+
+AI 会自动按照 SKILL.md 中的指南完成：
+- 名称和别名重复检查
+- 代码编写和编译
+- 数据库注册
+- 返回使用说明
+
+### 安全特性
+
+- **路径验证**：二进制文件必须在 kimi-workspace 目录内
+- **目录遍历防护**：拒绝包含 `..` 或绝对路径的二进制路径
+- **白名单控制**：可设置命令为白名单限定（RequiresWhitelist）
+- **超时保护**：自定义命令默认 30 秒超时
+- **参数安全**：使用 ArgumentList 传递参数，避免注入
 
 ## 进化系统详解
 
