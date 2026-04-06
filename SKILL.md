@@ -1,3 +1,8 @@
+---
+name: custom-command-registration
+description: 注册新的自定义命令到自定义命令数据库
+---
+
 # SKILL: Register Custom Command
 
 ## Objective
