@@ -319,7 +319,49 @@ public class Program
                         provider.GetRequiredService<IPersonalityEngine>(),
                         provider.GetRequiredService<ILogger<EvolutionSelectCommand>>()));
 
+                    // 注册 Kimi 代码助手命令
+                    var kimiConfigSvc = provider.GetRequiredService<KimiConfigService>();
+                    registry.Register(new KimiCommand(
+                        provider.GetRequiredService<IKimiRepositoryManager>(),
+                        provider.GetRequiredService<IKimiExecutionService>(),
+                        provider.GetRequiredService<IKimiRepositoryRepository>(),
+                        () => new KimiCommandConfig
+                        {
+                            AccessMode = kimiConfigSvc.CurrentConfig.AccessControl.Mode,
+                            Whitelist = kimiConfigSvc.CurrentConfig.AccessControl.Whitelist,
+                            NonWhitelistAccess = kimiConfigSvc.CurrentConfig.AccessControl.NonWhitelistAccess,
+                            DefaultTimeoutSeconds = kimiConfigSvc.CurrentConfig.Execution.DefaultTimeoutSeconds
+                        },
+                        provider.GetRequiredService<ILogger<KimiCommand>>()));
+
                     return registry;
+                });
+
+                // 注册 Kimi Agent 服务
+                services.AddSingleton<KimiConfigService>();
+
+                var kimiDbInitializer = new KimiDatabaseInitializer("Data Source=Data/kimi_data.db");
+                kimiDbInitializer.Initialize();
+                services.AddSingleton(kimiDbInitializer);
+
+                services.AddSingleton<IKimiRepositoryRepository, KimiRepositoryRepository>();
+
+                services.AddSingleton<IKimiRepositoryManager>(provider =>
+                {
+                    var kimiConfig = provider.GetRequiredService<KimiConfigService>();
+                    return new KimiRepositoryManager(
+                        provider.GetRequiredService<IKimiRepositoryRepository>(),
+                        provider.GetRequiredService<ILogger<KimiRepositoryManager>>(),
+                        kimiConfig.CurrentConfig.Execution.BasePath,
+                        kimiConfig.CurrentConfig.Git.DefaultBranch);
+                });
+
+                services.AddSingleton<IKimiExecutionService>(provider =>
+                {
+                    var kimiConfig = provider.GetRequiredService<KimiConfigService>();
+                    return new KimiExecutionService(
+                        provider.GetRequiredService<ILogger<KimiExecutionService>>(),
+                        kimiConfig.CurrentConfig.Execution.KimiCliPath);
                 });
 
                 // 注册消息处理器
