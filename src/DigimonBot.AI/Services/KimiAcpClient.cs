@@ -145,45 +145,60 @@ public class KimiAcpClient : IDisposable
                     var doc = JsonDocument.Parse(line);
                     var root = doc.RootElement;
 
-                    // 检查是响应还是通知
+                    // 检查是响应、服务端请求还是通知
                     if (root.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.Number)
                     {
-                        // 这是响应
                         var id = idElement.GetInt32();
-                        lock (_lock)
+
+                        if (root.TryGetProperty("method", out var reqMethodElement))
                         {
-                            if (_pendingRequests.TryGetValue(id, out var tcs))
+                            // 服务端请求（同时有 id 和 method）
+                            var reqMethod = reqMethodElement.GetString();
+                            _logger?.LogDebug("[KimiAcp] 收到服务端请求: {Method}, id={Id}", reqMethod, id);
+
+                            if (reqMethod == "session/request_permission" && root.TryGetProperty("params", out var permParams))
                             {
-                                if (root.TryGetProperty("result", out var result))
+                                // 处理工具调用权限请求 - 自动批准
+                                HandlePermissionRequest(id, permParams.Clone());
+                            }
+                            else
+                            {
+                                _logger?.LogWarning("[KimiAcp] 收到未处理的服务端请求: {Method}, id={Id}", reqMethod, id);
+                            }
+                        }
+                        else
+                        {
+                            // 这是响应（有 id，无 method）
+                            lock (_lock)
+                            {
+                                if (_pendingRequests.TryGetValue(id, out var tcs))
                                 {
-                                    _logger?.LogInformation("[KimiAcp] <- 收到响应 id={Id} (result)", id);
-                                    tcs.TrySetResult(result.Clone());
+                                    if (root.TryGetProperty("result", out var result))
+                                    {
+                                        _logger?.LogInformation("[KimiAcp] <- 收到响应 id={Id} (result)", id);
+                                        tcs.TrySetResult(result.Clone());
+                                    }
+                                    else if (root.TryGetProperty("error", out var error))
+                                    {
+                                        var errorMsg = error.GetProperty("message").GetString() ?? "Unknown error";
+                                        var errorCode = error.TryGetProperty("code", out var code) ? code.GetInt32() : 0;
+                                        _logger?.LogWarning("[KimiAcp] <- 收到错误响应 id={Id}: [{Code}] {Msg}", id, errorCode, errorMsg);
+                                        tcs.TrySetException(new KimiAcpException(errorMsg, errorCode));
+                                    }
+                                    _pendingRequests.Remove(id);
                                 }
-                                else if (root.TryGetProperty("error", out var error))
-                                {
-                                    var errorMsg = error.GetProperty("message").GetString() ?? "Unknown error";
-                                    var errorCode = error.TryGetProperty("code", out var code) ? code.GetInt32() : 0;
-                                    _logger?.LogWarning("[KimiAcp] <- 收到错误响应 id={Id}: [{Code}] {Msg}", id, errorCode, errorMsg);
-                                    tcs.TrySetException(new KimiAcpException(errorMsg, errorCode));
-                                }
-                                _pendingRequests.Remove(id);
                             }
                         }
                     }
                     else if (root.TryGetProperty("method", out var methodElement))
                     {
-                        // 这是通知
+                        // 这是通知（有 method，无 id）
                         var method = methodElement.GetString();
                         _logger?.LogDebug("[KimiAcp] 收到通知: {Method}", method);
                         
                         if (method == "session/update" && root.TryGetProperty("params", out var paramsElement))
                         {
                             HandleSessionUpdate(paramsElement.Clone());
-                        }
-                        else if (method == "session/request_permission" && root.TryGetProperty("params", out var permParams))
-                        {
-                            // 处理工具调用权限请求 - 自动批准
-                            HandlePermissionRequest(permParams.Clone());
                         }
                     }
                 }
@@ -283,7 +298,7 @@ public class KimiAcpClient : IDisposable
     /// <summary>
     /// 处理工具调用权限请求 - 自动批准（YOLO 模式）
     /// </summary>
-    private void HandlePermissionRequest(JsonElement paramsElement)
+    private void HandlePermissionRequest(int requestId, JsonElement paramsElement)
     {
         try
         {
@@ -320,20 +335,23 @@ public class KimiAcpClient : IDisposable
             _logger?.LogInformation("[KimiAcp] 自动批准工具调用: {ToolCallId}, 选项: {Option}, 会话: {SessionId}", 
                 toolCallId, selectedOptionId, shortSessionId);
 
-            // 发送权限响应（作为通知，不需要等待响应）
+            // 发送权限响应（JSON-RPC 响应格式，必须包含请求的 id）
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    var response = new
+                    // 注意：这里必须发送 JSON-RPC 响应（带 id 和 result），不是通知
+                    var response = new Dictionary<string, object>
                     {
-                        jsonrpc = "2.0",
-                        method = "session/permission_response",
-                        @params = new
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = requestId,
+                        ["result"] = new Dictionary<string, object>
                         {
-                            sessionId,
-                            toolCallId,
-                            selectedOption = selectedOptionId
+                            ["outcome"] = new Dictionary<string, string>
+                            {
+                                ["outcome"] = "selected",
+                                ["optionId"] = selectedOptionId
+                            }
                         }
                     };
 
@@ -342,6 +360,8 @@ public class KimiAcpClient : IDisposable
 
                     await _stdin!.WriteLineAsync(json);
                     await _stdin.FlushAsync();
+                    
+                    _logger?.LogInformation("[KimiAcp] 权限响应已发送: id={Id}", requestId);
                 }
                 catch (Exception ex)
                 {
