@@ -40,7 +40,7 @@ public class KimiAcpClient : IDisposable
     public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null)
     {
         _logger = logger;
-        _kimiExecutablePath = kimiExecutablePath ?? FindKimiExecutable();
+        _kimiExecutablePath = ResolveKimiExecutablePath(kimiExecutablePath);
     }
 
     #region 连接管理
@@ -56,7 +56,7 @@ public class KimiAcpClient : IDisposable
             return;
         }
 
-        _logger?.LogInformation("[KimiAcp] 正在启动 ACP 服务...");
+        _logger?.LogInformation("[KimiAcp] 正在启动 ACP 服务, 可执行文件路径: {Path}", _kimiExecutablePath);
 
         var psi = new ProcessStartInfo
         {
@@ -389,23 +389,53 @@ public class KimiAcpClient : IDisposable
 
     #region 工具方法
 
-    private static string FindKimiExecutable()
+    /// <summary>
+    /// 解析 kimi 可执行文件路径，将相对名称（如 "kimi"）解析为绝对路径。
+    /// 当进程以服务方式运行时，PATH 可能不包含 kimi 的安装目录，
+    /// 因此需要主动搜索常见安装位置。
+    /// </summary>
+    private static string ResolveKimiExecutablePath(string? providedPath)
     {
-        var candidates = new[]
+        // Determine the executable name to search for
+        var executableName = string.IsNullOrWhiteSpace(providedPath) ? "kimi" : providedPath;
+
+        // If an absolute path was provided and the file exists, use it directly
+        if (Path.IsPathRooted(executableName) && File.Exists(executableName))
+            return executableName;
+
+        // Extract just the filename for searching (handles cases like "./kimi" or relative paths)
+        var fileName = Path.GetFileName(executableName);
+
+        // Well-known installation locations (checked first since service PATH may be minimal)
+        var wellKnownPaths = new[]
         {
-            "kimi",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "kimi"),
-            "/usr/local/bin/kimi",
-            "/usr/bin/kimi"
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", fileName),
+            $"/usr/local/bin/{fileName}",
+            $"/usr/bin/{fileName}"
         };
 
-        foreach (var candidate in candidates)
+        foreach (var candidate in wellKnownPaths)
         {
-            if (candidate == "kimi" || File.Exists(candidate))
+            if (File.Exists(candidate))
                 return candidate;
         }
 
-        throw new FileNotFoundException("无法找到 kimi 可执行文件");
+        // Search PATH environment variable directories
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            foreach (var dir in pathEnv.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(dir)) continue;
+
+                var fullPath = Path.Combine(dir, fileName);
+                if (File.Exists(fullPath))
+                    return fullPath;
+            }
+        }
+
+        // Fallback: return the provided name as-is and let Process.Start handle it
+        return executableName;
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
