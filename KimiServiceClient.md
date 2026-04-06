@@ -978,15 +978,230 @@ app.Run();
 
 ### 1. 会话管理策略
 
+#### 方案 A: 每次任务新建会话（隔离性好）
+
 ```csharp
-// 方案 A: 每次任务新建会话（隔离性好）
 var session = await client.CreateSessionAsync(workDir);
 // ... 执行任务 ...
 await client.DeleteSessionAsync(session.Id);
+```
 
-// 方案 B: 长会话复用（上下文连贯）
+#### 方案 B: 长会话复用（上下文连贯）
+
+```csharp
 var response1 = await client.ChatAsync("分析代码", sessionId: "fixed-session");
 var response2 = await client.ChatAsync("基于分析结果重构", sessionId: "fixed-session");
+```
+
+#### 方案 C: 动态切换会话（多项目/多线程场景）
+
+```csharp
+// 同时管理多个会话，按需切换
+var sessionA = await client.CreateSessionAsync("/project/A");
+var sessionB = await client.CreateSessionAsync("/project/B");
+
+// 切换到项目 A 的上下文
+var respA = await client.ChatAsync("分析当前项目", sessionId: sessionA.Id);
+
+// 切换到项目 B 的上下文
+var respB = await client.ChatAsync("分析当前项目", sessionId: sessionB.Id);
+
+// 回到项目 A 继续之前的对话
+var respA2 = await client.ChatAsync("基于刚才的分析生成代码", sessionId: sessionA.Id);
+```
+
+#### 方案 D: 使用 KimiSessionManager 管理多会话
+
+```csharp
+using System.Collections.Concurrent;
+
+/// <summary>
+/// 多会话管理器 - 支持同时管理多个 Kimi 会话
+/// </summary>
+public class KimiSessionManager : IDisposable
+{
+    private readonly KimiServiceClient _client;
+    private readonly ConcurrentDictionary<string, SessionContext> _sessions = new();
+    private readonly string _defaultWorkDir;
+
+    public KimiSessionManager(KimiServiceClient client, string defaultWorkDir)
+    {
+        _client = client;
+        _defaultWorkDir = defaultWorkDir;
+    }
+
+    /// <summary>
+    /// 创建新会话
+    /// </summary>
+    public async Task<string> CreateSessionAsync(
+        string? name = null,
+        string? workDir = null,
+        CancellationToken ct = default)
+    {
+        var session = await _client.CreateSessionAsync(workDir ?? _defaultWorkDir, ct);
+        var context = new SessionContext
+        {
+            Id = session.Id,
+            Name = name ?? $"Session_{session.Id[..8]}",
+            WorkDir = workDir ?? _defaultWorkDir,
+            CreatedAt = DateTime.UtcNow
+        };
+        _sessions[context.Id] = context;
+        return context.Id;
+    }
+
+    /// <summary>
+    /// 切换到已有会话并发送消息
+    /// </summary>
+    public async Task<string> ChatAsync(
+        string sessionId,
+        string message,
+        bool yolo = true,
+        CancellationToken ct = default)
+    {
+        if (!_sessions.ContainsKey(sessionId))
+        {
+            // 尝试恢复已存在的会话
+            var session = await _client.GetSessionAsync(sessionId, ct);
+            if (session == null)
+                throw new InvalidOperationException($"Session {sessionId} not found");
+            
+            _sessions[sessionId] = new SessionContext
+            {
+                Id = sessionId,
+                Name = $"Restored_{sessionId[..8]}",
+                WorkDir = session.WorkDir,
+                CreatedAt = session.CreatedAt
+            };
+        }
+
+        var context = _sessions[sessionId];
+        var response = await _client.ChatAsync(message, sessionId, context.WorkDir, yolo, ct);
+        
+        context.LastActivity = DateTime.UtcNow;
+        context.MessageCount++;
+        
+        return response.Response;
+    }
+
+    /// <summary>
+    /// 切换默认会话（简化后续调用）
+    /// </summary>
+    public string? CurrentSessionId { get; private set; }
+
+    public void SwitchSession(string sessionId)
+    {
+        if (!_sessions.ContainsKey(sessionId))
+            throw new InvalidOperationException($"Session {sessionId} not registered");
+        
+        CurrentSessionId = sessionId;
+    }
+
+    /// <summary>
+    /// 使用当前默认会话发送消息
+    /// </summary>
+    public async Task<string> ChatWithCurrentAsync(
+        string message,
+        bool yolo = true,
+        CancellationToken ct = default)
+    {
+        if (CurrentSessionId == null)
+            throw new InvalidOperationException("No current session set. Call SwitchSession first.");
+        
+        return await ChatAsync(CurrentSessionId, message, yolo, ct);
+    }
+
+    /// <summary>
+    /// 获取所有管理的会话
+    /// </summary>
+    public IReadOnlyList<SessionContext> GetAllSessions() => _sessions.Values.ToList().AsReadOnly();
+
+    /// <summary>
+    /// 删除会话
+    /// </summary>
+    public async Task<bool> RemoveSessionAsync(string sessionId, CancellationToken ct = default)
+    {
+        if (_sessions.TryRemove(sessionId, out _))
+        {
+            await _client.DeleteSessionAsync(sessionId, ct);
+            if (CurrentSessionId == sessionId)
+                CurrentSessionId = null;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 清理所有过期会话
+    /// </summary>
+    public async Task CleanupInactiveSessions(TimeSpan maxInactiveTime, CancellationToken ct = default)
+    {
+        var cutoff = DateTime.UtcNow - maxInactiveTime;
+        var toRemove = _sessions.Values.Where(s => s.LastActivity < cutoff).ToList();
+        
+        foreach (var session in toRemove)
+        {
+            await RemoveSessionAsync(session.Id, ct);
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var sessionId in _sessions.Keys)
+        {
+            try
+            {
+                _client.DeleteSessionAsync(sessionId).Wait(TimeSpan.FromSeconds(5));
+            }
+            catch { /* ignore */ }
+        }
+        _sessions.Clear();
+    }
+}
+
+public class SessionContext
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string WorkDir { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime LastActivity { get; set; }
+    public int MessageCount { get; set; }
+}
+```
+
+**使用示例 - 多会话管理：**
+
+```csharp
+using var client = new KimiServiceClient(options);
+var manager = new KimiSessionManager(client, "/projects");
+
+// 创建多个项目会话
+var webAppId = await manager.CreateSessionAsync("WebApp", "/projects/web");
+var apiId = await manager.CreateSessionAsync("API", "/projects/api");
+var docId = await manager.CreateSessionAsync("Docs", "/projects/docs");
+
+// 在 WebApp 项目中工作
+manager.SwitchSession(webAppId);
+var resp1 = await manager.ChatWithCurrentAsync("分析前端架构");
+var resp2 = await manager.ChatWithCurrentAsync("有哪些性能问题？");  // 保持上下文
+
+// 切换到 API 项目
+manager.SwitchSession(apiId);
+var resp3 = await manager.ChatWithCurrentAsync("设计用户认证接口");
+
+// 再回到 WebApp 项目（上下文还在）
+manager.SwitchSession(webAppId);
+var resp4 = await manager.ChatWithCurrentAsync("根据刚才的分析重构代码");  // 还记得之前的内容
+
+// 查看所有会话
+foreach (var session in manager.GetAllSessions())
+{
+    Console.WriteLine($"{session.Name}: {session.MessageCount} messages");
+}
+
+// 清理旧会话
+await manager.CleanupInactiveSessions(TimeSpan.FromHours(1));
 ```
 
 ### 2. 错误处理和重试
