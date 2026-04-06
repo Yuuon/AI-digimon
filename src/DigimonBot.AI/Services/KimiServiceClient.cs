@@ -49,10 +49,16 @@ public class KimiServiceClient : IKimiServiceClient
             if (_client?.IsConnected == true && _client.IsInitialized)
                 return;
 
-            _logger.LogInformation("[KimiService] 正在连接 Kimi ACP 服务...");
+            // Dispose old client if it's in broken state (process exited, not initialized, etc.)
+            if (_client != null)
+            {
+                _logger.LogWarning("[KimiService] ACP 服务不可用 (IsConnected={Connected}, IsInitialized={Init}), 正在重建连接...",
+                    _client.IsConnected, _client.IsInitialized);
+                try { _client.Dispose(); } catch { }
+                _client = null;
+            }
 
-            // Dispose old client if exists
-            _client?.Dispose();
+            _logger.LogInformation("[KimiService] 正在连接 Kimi ACP 服务...");
 
             _client = new KimiAcpClient(
                 kimiExecutablePath: string.IsNullOrEmpty(_options.KimiExecutablePath)
@@ -156,7 +162,7 @@ public class KimiServiceClient : IKimiServiceClient
                 }
                 else if (e.UpdateType != null)
                 {
-                    _logger.LogInformation("[KimiService] 收到更新 [{UpdateType}] sess={SessionId}",
+                    _logger.LogDebug("[KimiService] 收到更新 [{UpdateType}] sess={SessionId}",
                         e.UpdateType, activeSessionId.Length > SessionIdLogLength ? activeSessionId[..SessionIdLogLength] : activeSessionId);
                 }
             }
@@ -186,10 +192,24 @@ public class KimiServiceClient : IKimiServiceClient
         }
         catch (KimiAcpException ex)
         {
+            // ACP 协议层错误，可能 ACP 进程已不可用，强制回收以便下次自动重建
+            ForceRecycleClient("KimiAcpException: " + ex.Message);
             throw new KimiServiceException(
                 $"Kimi ACP 错误: {ex.Message}",
                 ex.ErrorCode,
                 ex.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            // 超时或取消后 ACP 进程可能处于不确定状态，强制回收
+            ForceRecycleClient("OperationCanceled (超时/取消)");
+            throw;
+        }
+        catch (Exception ex) when (ex is not KimiServiceException)
+        {
+            // 任何非预期异常后也需要回收，防止 ACP 进程卡死
+            ForceRecycleClient(ex.GetType().Name + ": " + ex.Message);
+            throw;
         }
         finally
         {
@@ -261,6 +281,24 @@ public class KimiServiceClient : IKimiServiceClient
     #endregion
 
     #region 工具方法
+
+    /// <summary>
+    /// 强制回收 ACP 客户端连接，确保下次调用自动重建
+    /// 用于异常/超时后 ACP 进程可能处于不确定状态的情况
+    /// </summary>
+    private void ForceRecycleClient(string reason)
+    {
+        _logger.LogWarning("[KimiService] 强制回收 ACP 连接: {Reason}", reason);
+        try
+        {
+            _client?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[KimiService] 回收时 Dispose 异常 (已忽略)");
+        }
+        _client = null;
+    }
 
     /// <summary>
     /// 将 ACP SessionInfo 映射为 KimiSessionInfo

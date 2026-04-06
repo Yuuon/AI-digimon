@@ -281,20 +281,18 @@ public class KimiAcpClient : IDisposable
         await _stdin!.WriteLineAsync(json);
         await _stdin.FlushAsync();
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(5)); // 5 分钟超时
-
         try
         {
-            return await tcs.Task.WaitAsync(cts.Token);
+            // 使用调用方传入的 CancellationToken 控制超时，不再硬编码 5 分钟
+            return await tcs.Task.WaitAsync(ct);
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException)
         {
             lock (_lock)
             {
                 _pendingRequests.Remove(id);
             }
-            throw new TimeoutException($"请求 {method} 超时");
+            throw;
         }
     }
 
