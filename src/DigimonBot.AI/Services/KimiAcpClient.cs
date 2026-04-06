@@ -36,11 +36,17 @@ public class KimiAcpClient : IDisposable
 
     public bool IsConnected => _process?.HasExited == false;
     public bool IsInitialized => _isInitialized;
+    
+    /// <summary>
+    /// 是否自动批准工具调用（YOLO 模式）
+    /// </summary>
+    public bool AutoApproveTools { get; set; } = true;
 
-    public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null)
+    public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
     {
         _logger = logger;
         _kimiExecutablePath = ResolveKimiExecutablePath(kimiExecutablePath);
+        AutoApproveTools = autoApproveTools;
     }
 
     #region 连接管理
@@ -168,10 +174,16 @@ public class KimiAcpClient : IDisposable
                     {
                         // 这是通知
                         var method = methodElement.GetString();
-                        _logger?.LogInformation("[KimiAcp] 收到通知: {Method}", method);
+                        _logger?.LogDebug("[KimiAcp] 收到通知: {Method}", method);
+                        
                         if (method == "session/update" && root.TryGetProperty("params", out var paramsElement))
                         {
                             HandleSessionUpdate(paramsElement.Clone());
+                        }
+                        else if (method == "session/request_permission" && root.TryGetProperty("params", out var permParams))
+                        {
+                            // 处理工具调用权限请求 - 自动批准
+                            HandlePermissionRequest(permParams.Clone());
                         }
                     }
                 }
@@ -265,6 +277,81 @@ public class KimiAcpClient : IDisposable
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "[KimiAcp] 处理 session/update 失败");
+        }
+    }
+
+    /// <summary>
+    /// 处理工具调用权限请求 - 自动批准（YOLO 模式）
+    /// </summary>
+    private void HandlePermissionRequest(JsonElement paramsElement)
+    {
+        try
+        {
+            if (!AutoApproveTools)
+            {
+                _logger?.LogWarning("[KimiAcp] 自动批准已禁用，无法执行工具调用");
+                return;
+            }
+            
+            var sessionId = paramsElement.GetProperty("sessionId").GetString() ?? "";
+            var toolCall = paramsElement.GetProperty("toolCall");
+            var toolCallId = toolCall.GetProperty("toolCallId").GetString() ?? "";
+            var options = paramsElement.GetProperty("options");
+            
+            // 查找 "approve_for_session" 或 "approve" 选项
+            string? selectedOptionId = null;
+            foreach (var option in options.EnumerateArray())
+            {
+                var kind = option.GetProperty("kind").GetString();
+                if (kind == "allow_always" || kind == "allow_once")
+                {
+                    selectedOptionId = option.GetProperty("optionId").GetString();
+                    break;
+                }
+            }
+
+            if (selectedOptionId == null)
+            {
+                _logger?.LogWarning("[KimiAcp] 未找到批准选项，无法处理权限请求");
+                return;
+            }
+
+            var shortSessionId = sessionId.Length > SessionIdLogLength ? sessionId[..SessionIdLogLength] : sessionId;
+            _logger?.LogInformation("[KimiAcp] 自动批准工具调用: {ToolCallId}, 选项: {Option}, 会话: {SessionId}", 
+                toolCallId, selectedOptionId, shortSessionId);
+
+            // 发送权限响应（作为通知，不需要等待响应）
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var response = new
+                    {
+                        jsonrpc = "2.0",
+                        method = "session/permission_response",
+                        @params = new
+                        {
+                            sessionId,
+                            toolCallId,
+                            selectedOption = selectedOptionId
+                        }
+                    };
+
+                    var json = JsonSerializer.Serialize(response, JsonOptions);
+                    _logger?.LogDebug("[KimiAcp] -> 发送权限响应: {Json}", json);
+
+                    await _stdin!.WriteLineAsync(json);
+                    await _stdin.FlushAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "[KimiAcp] 发送权限响应失败");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[KimiAcp] 处理权限请求失败");
         }
     }
 
