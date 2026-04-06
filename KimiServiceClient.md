@@ -1,955 +1,257 @@
-# Kimi CLI 服务模式 .NET 封装指南
+# Kimi ACP .NET 客户端指南
 
-本文档提供将 Kimi Code CLI 以服务模式集成到 .NET 应用程序的完整方案。
+本文档提供通过 **ACP (Agent Client Protocol)** 将 Kimi Code CLI 集成到 .NET 应用程序的完整方案。
 
-## 架构概述
+## 为什么选择 ACP？
+
+| 特性 | `kimi acp` | `kimi web` + CLI | CLI 单次调用 |
+|------|------------|------------------|--------------|
+| AI 聊天 API | ✅ `session/prompt` | ❌ 不支持 | ⚠️ 进程调用 |
+| 会话保持 | ✅ 多会话管理 | ✅ HTTP API | ❌ 无状态 |
+| 流式输出 | ✅ `session/update` | ❌ 阻塞 | ❌ 阻塞 |
+| 取消操作 | ✅ `session/cancel` | ❌ 不支持 | ❌ 不支持 |
+| 协议 | JSON-RPC over stdio | HTTP + 进程 | 进程 |
+
+**ACP 是功能最完整、设计最优雅的方案。**
+
+## 前置要求
+
+1. 已安装 Kimi CLI：`pip install kimi-cli` (>= 1.30)
+2. 已完成登录配置：`kimi login`
+3. .NET 8.0 或更高版本
+
+## 架构
 
 ```
-┌─────────────────┐      HTTP API      ┌──────────────────┐
-│   .NET 应用      │ ◄────────────────► │  Kimi Web 服务   │
-│ (KimiServiceClient)│                   │  (kimi web)      │
+┌─────────────────┐      JSON-RPC      ┌──────────────────┐
+│   .NET 应用      │ ◄────────────────► │  Kimi ACP 服务   │
+│ (KimiAcpClient) │     (stdin/stdout) │  (kimi acp)      │
 └─────────────────┘                    └──────────────────┘
-                                              │
-                                              ▼
+                                               │
+                                               ▼
                                         ┌─────────────┐
                                         │  Kimi API   │
                                         └─────────────┘
 ```
 
-## 前置要求
+## 快速开始
 
-1. 已安装 Kimi CLI：`pip install kimi-cli`
-2. 已完成登录配置：`kimi login`
-3. .NET 8.0 或更高版本
-
-## 启动 Kimi Web 服务
-
-### 手动启动（开发/测试）
-
-```bash
-# 基础启动
-kimi web --port 5494 --no-open
-
-# 指定工作目录（所有文件操作基于此目录）
-kimi web --port 5494 --no-open --work-dir /path/to/project
-
-# 后台启动（Linux/macOS）
-nohup kimi web --port 5494 --no-open > /tmp/kimi-web.log 2>&1 &
-
-# 后台启动（Windows）
-start /B kimi web --port 5494 --no-open
-```
-
-### 自动启动（生产环境）
-
-.NET 应用中自动管理服务生命周期（见下方完整代码）。
-
----
-
-## 完整 C# 封装代码
-
-### 1. 数据模型 (KimiModels.cs)
+### 1. 基础用法
 
 ```csharp
-using System.Text.Json.Serialization;
+using DigimonBot.AI.Services;
 
-namespace KimiIntegration.Models;
+// 创建会话
+var session = new KimiAcpSession("/path/to/workdir", logger);
 
-/// <summary>
-/// 聊天请求
-/// </summary>
-public class ChatRequest
-{
-    [JsonPropertyName("message")]
-    public string Message { get; set; } = string.Empty;
+// 连接 ACP 服务
+await session.ConnectAsync();
 
-    [JsonPropertyName("session_id")]
-    public string? SessionId { get; set; }
+// 创建新会话
+await session.CreateSessionAsync();
 
-    [JsonPropertyName("yolo")]
-    public bool Yolo { get; set; } = true;
-
-    [JsonPropertyName("work_dir")]
-    public string? WorkDir { get; set; }
-}
-
-/// <summary>
-/// 聊天响应
-/// </summary>
-public class ChatResponse
-{
-    [JsonPropertyName("response")]
-    public string Response { get; set; } = string.Empty;
-
-    [JsonPropertyName("session_id")]
-    public string SessionId { get; set; } = string.Empty;
-
-    [JsonPropertyName("tool_calls")]
-    public List<ToolCallInfo>? ToolCalls { get; set; }
-
-    [JsonPropertyName("completed")]
-    public bool Completed { get; set; }
-}
-
-/// <summary>
-/// 工具调用信息
-/// </summary>
-public class ToolCallInfo
-{
-    [JsonPropertyName("tool")]
-    public string Tool { get; set; } = string.Empty;
-
-    [JsonPropertyName("params")]
-    public Dictionary<string, object>? Params { get; set; }
-}
-
-/// <summary>
-/// 会话信息
-/// </summary>
-public class SessionInfo
-{
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
-
-    [JsonPropertyName("work_dir")]
-    public string WorkDir { get; set; } = string.Empty;
-
-    [JsonPropertyName("created_at")]
-    public DateTime CreatedAt { get; set; }
-
-    [JsonPropertyName("last_activity")]
-    public DateTime LastActivity { get; set; }
-
-    [JsonPropertyName("message_count")]
-    public int MessageCount { get; set; }
-}
-
-/// <summary>
-/// 流式响应块
-/// </summary>
-public class StreamChunk
-{
-    [JsonPropertyName("type")]
-    public string Type { get; set; } = string.Empty; // "delta", "tool_call", "complete", "error"
-
-    [JsonPropertyName("content")]
-    public string? Content { get; set; }
-
-    [JsonPropertyName("tool_call")]
-    public ToolCallInfo? ToolCall { get; set; }
-
-    [JsonPropertyName("session_id")]
-    public string? SessionId { get; set; }
-}
-
-/// <summary>
-/// Kimi 服务配置
-/// </summary>
-public class KimiServiceOptions
-{
-    /// <summary>
-    /// 服务基础 URL，默认 http://127.0.0.1:5494
-    /// </summary>
-    public string BaseUrl { get; set; } = "http://127.0.0.1:5494";
-
-    /// <summary>
-    /// 请求超时时间，默认 5 分钟
-    /// </summary>
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// 是否自动管理服务进程
-    /// </summary>
-    public bool AutoManageProcess { get; set; } = false;
-
-    /// <summary>
-    /// Kimi CLI 可执行文件路径
-    /// </summary>
-    public string? KimiExecutablePath { get; set; }
-
-    /// <summary>
-    /// 默认工作目录
-    /// </summary>
-    public string? DefaultWorkDir { get; set; }
-
-    /// <summary>
-    /// 服务启动端口
-    /// </summary>
-    public int Port { get; set; } = 5494;
-}
-```
-
-### 2. 核心客户端 (KimiServiceClient.cs)
-
-```csharp
-using System.Diagnostics;
-using System.Net.Http.Json;
-using System.Runtime.CompilerServices;
-using System.Text.Json;
-using KimiIntegration.Models;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-
-namespace KimiIntegration;
-
-/// <summary>
-/// Kimi Web 服务客户端
-/// </summary>
-public class KimiServiceClient : IDisposable
-{
-    private readonly HttpClient _httpClient;
-    private readonly KimiServiceOptions _options;
-    private readonly ILogger<KimiServiceClient>? _logger;
-    private Process? _kimiProcess;
-    private bool _isDisposed;
-    private readonly SemaphoreSlim _processLock = new(1, 1);
-
-    public KimiServiceClient(
-        IOptions<KimiServiceOptions> options,
-        ILogger<KimiServiceClient>? logger = null)
-    {
-        _options = options.Value;
-        _logger = logger;
-
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(_options.BaseUrl),
-            Timeout = _options.Timeout
-        };
-    }
-
-    public KimiServiceClient(KimiServiceOptions options, ILogger<KimiServiceClient>? logger = null)
-    {
-        _options = options;
-        _logger = logger;
-
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(_options.BaseUrl),
-            Timeout = _options.Timeout
-        };
-    }
-
-    #region 服务生命周期管理
-
-    /// <summary>
-    /// 确保服务正在运行
-    /// </summary>
-    public async Task EnsureServiceRunningAsync(CancellationToken ct = default)
-    {
-        if (!_options.AutoManageProcess) return;
-
-        await _processLock.WaitAsync(ct);
-        try
-        {
-            if (_kimiProcess?.HasExited == false) return;
-
-            _logger?.LogInformation("Starting Kimi web service...");
-
-            var executable = _options.KimiExecutablePath ?? FindKimiExecutable();
-            var arguments = $"web --port {_options.Port} --no-open";
-
-            if (!string.IsNullOrEmpty(_options.DefaultWorkDir))
-            {
-                arguments += $" --work-dir \"{_options.DefaultWorkDir}\"";
-            }
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = executable,
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            _kimiProcess = new Process { StartInfo = psi };
-            _kimiProcess.OutputDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                    _logger?.LogDebug("[Kimi] {Output}", e.Data);
-            };
-            _kimiProcess.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                    _logger?.LogWarning("[Kimi] {Error}", e.Data);
-            };
-
-            _kimiProcess.Start();
-            _kimiProcess.BeginOutputReadLine();
-            _kimiProcess.BeginErrorReadLine();
-
-            // 等待服务就绪
-            await WaitForServiceReadyAsync(ct);
-            _logger?.LogInformation("Kimi web service started on port {Port}", _options.Port);
-        }
-        finally
-        {
-            _processLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// 停止托管的服务
-    /// </summary>
-    public async Task StopServiceAsync(CancellationToken ct = default)
-    {
-        if (!_options.AutoManageProcess || _kimiProcess == null) return;
-
-        await _processLock.WaitAsync(ct);
-        try
-        {
-            if (_kimiProcess?.HasExited == false)
-            {
-                _logger?.LogInformation("Stopping Kimi web service...");
-                _kimiProcess.Kill(entireProcessTree: true);
-                await _kimiProcess.WaitForExitAsync(ct);
-                _logger?.LogInformation("Kimi web service stopped");
-            }
-        }
-        finally
-        {
-            _processLock.Release();
-        }
-    }
-
-    private async Task WaitForServiceReadyAsync(CancellationToken ct)
-    {
-        var maxRetries = 30;
-        for (int i = 0; i < maxRetries; i++)
-        {
-            try
-            {
-                var response = await _httpClient.GetAsync("/health", ct);
-                if (response.IsSuccessStatusCode) return;
-            }
-            catch { /* ignore */ }
-
-            await Task.Delay(500, ct);
-        }
-        throw new TimeoutException("Kimi web service failed to start within 15 seconds");
-    }
-
-    private static string FindKimiExecutable()
-    {
-        // 尝试常见路径
-        var candidates = new[]
-        {
-            "kimi",  // PATH 中
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "kimi"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), 
-                "Python", "Scripts", "kimi.exe"),
-            "/usr/local/bin/kimi",
-            "/usr/bin/kimi"
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (candidate == "kimi" || File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new FileNotFoundException("Could not find kimi executable. Please install kimi-cli or specify path.");
-    }
-
-    #endregion
-
-    #region 聊天 API
-
-    /// <summary>
-    /// 发送单条消息并获取回复
-    /// </summary>
-    public async Task<ChatResponse> ChatAsync(
-        string message,
-        string? sessionId = null,
-        string? workDir = null,
-        bool yolo = true,
-        CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var request = new ChatRequest
-        {
-            Message = message,
-            SessionId = sessionId,
-            WorkDir = workDir ?? _options.DefaultWorkDir,
-            Yolo = yolo
-        };
-
-        var response = await _httpClient.PostAsJsonAsync("/api/chat", request, ct);
-        await EnsureSuccessAsync(response, ct);
-
-        var result = await response.Content.ReadFromJsonAsync<ChatResponse>(cancellationToken: ct);
-        return result ?? throw new InvalidOperationException("Empty response from Kimi service");
-    }
-
-    /// <summary>
-    /// 流式聊天，返回 IAsyncEnumerable
-    /// </summary>
-    public async IAsyncEnumerable<StreamChunk> ChatStreamAsync(
-        string message,
-        string? sessionId = null,
-        string? workDir = null,
-        bool yolo = true,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var request = new ChatRequest
-        {
-            Message = message,
-            SessionId = sessionId,
-            WorkDir = workDir ?? _options.DefaultWorkDir,
-            Yolo = yolo
-        };
-
-        using var response = await _httpClient.PostAsJsonAsync("/api/chat/stream", request, ct);
-        await EnsureSuccessAsync(response, ct);
-
-        using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var reader = new StreamReader(stream);
-
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
-        {
-            var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            var chunk = JsonSerializer.Deserialize<StreamChunk>(line);
-            if (chunk != null) yield return chunk;
-        }
-    }
-
-    /// <summary>
-    /// 同步聊天（阻塞直到完成）
-    /// </summary>
-    public async Task<string> ChatSimpleAsync(
-        string message,
-        string? sessionId = null,
-        string? workDir = null,
-        bool yolo = true,
-        CancellationToken ct = default)
-    {
-        var response = await ChatAsync(message, sessionId, workDir, yolo, ct);
-        return response.Response;
-    }
-
-    #endregion
-
-    #region 会话管理
-
-    /// <summary>
-    /// 获取所有活跃会话
-    /// </summary>
-    public async Task<List<SessionInfo>> GetSessionsAsync(CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var response = await _httpClient.GetAsync("/api/sessions", ct);
-        await EnsureSuccessAsync(response, ct);
-
-        var result = await response.Content.ReadFromJsonAsync<List<SessionInfo>>(cancellationToken: ct);
-        return result ?? new List<SessionInfo>();
-    }
-
-    /// <summary>
-    /// 获取会话详情
-    /// </summary>
-    public async Task<SessionInfo?> GetSessionAsync(string sessionId, CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var response = await _httpClient.GetAsync($"/api/sessions/{sessionId}", ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
-
-        await EnsureSuccessAsync(response, ct);
-        return await response.Content.ReadFromJsonAsync<SessionInfo>(cancellationToken: ct);
-    }
-
-    /// <summary>
-    /// 删除会话
-    /// </summary>
-    public async Task<bool> DeleteSessionAsync(string sessionId, CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var response = await _httpClient.DeleteAsync($"/api/sessions/{sessionId}", ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
-
-        await EnsureSuccessAsync(response, ct);
-        return true;
-    }
-
-    /// <summary>
-    /// 创建新会话
-    /// </summary>
-    public async Task<SessionInfo> CreateSessionAsync(string? workDir = null, CancellationToken ct = default)
-    {
-        await EnsureServiceRunningAsync(ct);
-
-        var request = new { work_dir = workDir ?? _options.DefaultWorkDir };
-        var response = await _httpClient.PostAsJsonAsync("/api/sessions", request, ct);
-        await EnsureSuccessAsync(response, ct);
-
-        var result = await response.Content.ReadFromJsonAsync<SessionInfo>(cancellationToken: ct);
-        return result ?? throw new InvalidOperationException("Empty response");
-    }
-
-    #endregion
-
-    #region 文件操作（通过 Kimi 代理）
-
-    /// <summary>
-    /// 读取文件内容（通过 Kimi 服务）
-    /// </summary>
-    public async Task<string> ReadFileAsync(string path, string? sessionId = null, CancellationToken ct = default)
-    {
-        var prompt = $"读取文件 {path} 的内容并原样返回";
-        var response = await ChatAsync(prompt, sessionId, yolo: true, ct: ct);
-        return response.Response;
-    }
-
-    /// <summary>
-    /// 分析代码文件
-    /// </summary>
-    public async Task<string> AnalyzeCodeAsync(string path, string? sessionId = null, CancellationToken ct = default)
-    {
-        var prompt = $"请分析文件 {path}，说明其功能、关键逻辑和潜在问题";
-        var response = await ChatAsync(prompt, sessionId, yolo: true, ct: ct);
-        return response.Response;
-    }
-
-    #endregion
-
-    #region 工具方法
-
-    private async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
-    {
-        if (response.IsSuccessStatusCode) return;
-
-        var content = await response.Content.ReadAsStringAsync(ct);
-        throw new KimiServiceException(
-            $"Kimi service error: {(int)response.StatusCode} {response.ReasonPhrase}",
-            response.StatusCode,
-            content);
-    }
-
-    public void Dispose()
-    {
-        if (_isDisposed) return;
-        _isDisposed = true;
-
-        _httpClient.Dispose();
-        _processLock.Dispose();
-
-        if (_kimiProcess?.HasExited == false)
-        {
-            try
-            {
-                _kimiProcess.Kill(entireProcessTree: true);
-                _kimiProcess.WaitForExit(TimeSpan.FromSeconds(5));
-            }
-            catch { /* ignore */ }
-        }
-
-        _kimiProcess?.Dispose();
-        GC.SuppressFinalize(this);
-    }
-
-    #endregion
-}
-
-/// <summary>
-/// Kimi 服务异常
-/// </summary>
-public class KimiServiceException : Exception
-{
-    public System.Net.HttpStatusCode StatusCode { get; }
-    public string? ResponseContent { get; }
-
-    public KimiServiceException(string message, System.Net.HttpStatusCode statusCode, string? responseContent = null)
-        : base(message)
-    {
-        StatusCode = statusCode;
-        ResponseContent = responseContent;
-    }
-}
-```
-
-### 3. 高级封装 - Agent 会话管理 (KimiAgentSession.cs)
-
-```csharp
-using KimiIntegration.Models;
-using Microsoft.Extensions.Logging;
-
-namespace KimiIntegration;
-
-/// <summary>
-/// 高级 Agent 会话封装，维护上下文和状态
-/// </summary>
-public class KimiAgentSession : IDisposable
-{
-    private readonly KimiServiceClient _client;
-    private readonly ILogger<KimiAgentSession>? _logger;
-    private readonly string _workDir;
-    private string? _sessionId;
-    private readonly List<ChatMessage> _history = new();
-    private readonly SemaphoreSlim _lock = new(1, 1);
-
-    public string? SessionId => _sessionId;
-    public IReadOnlyList<ChatMessage> History => _history.AsReadOnly();
-    public string WorkDir => _workDir;
-
-    public KimiAgentSession(
-        KimiServiceClient client,
-        string workDir,
-        ILogger<KimiAgentSession>? logger = null)
-    {
-        _client = client;
-        _workDir = workDir;
-        _logger = logger;
-    }
-
-    /// <summary>
-    /// 初始化会话
-    /// </summary>
-    public async Task InitializeAsync(CancellationToken ct = default)
-    {
-        var session = await _client.CreateSessionAsync(_workDir, ct);
-        _sessionId = session.Id;
-        _logger?.LogInformation("Agent session initialized: {SessionId}", _sessionId);
-    }
-
-    /// <summary>
-    /// 恢复已有会话
-    /// </summary>
-    public async Task ResumeAsync(string sessionId, CancellationToken ct = default)
-    {
-        var session = await _client.GetSessionAsync(sessionId, ct);
-        if (session == null)
-            throw new InvalidOperationException($"Session {sessionId} not found");
-
-        _sessionId = sessionId;
-        _logger?.LogInformation("Agent session resumed: {SessionId}", _sessionId);
-    }
-
-    /// <summary>
-    /// 发送消息并获取回复
-    /// </summary>
-    public async Task<string> SendAsync(string message, bool yolo = true, CancellationToken ct = default)
-    {
-        if (_sessionId == null)
-            throw new InvalidOperationException("Session not initialized. Call InitializeAsync first.");
-
-        await _lock.WaitAsync(ct);
-        try
-        {
-            _history.Add(new ChatMessage { Role = "user", Content = message });
-
-            var response = await _client.ChatAsync(message, _sessionId, _workDir, yolo, ct);
-
-            _history.Add(new ChatMessage { Role = "assistant", Content = response.Response });
-
-            return response.Response;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    /// <summary>
-    /// 执行代码分析任务
-    /// </summary>
-    public async Task<CodeAnalysisResult> AnalyzeProjectAsync(string? targetPath = null, CancellationToken ct = default)
-    {
-        var path = targetPath ?? _workDir;
-        var prompt = $"""
-            请分析项目路径: {path}
-            1. 项目结构和主要文件
-            2. 技术栈和依赖
-            3. 核心功能模块
-            4. 潜在问题和改进建议
-            请以结构化方式返回分析结果。
-            """;
-
-        var response = await SendAsync(prompt, yolo: true, ct: ct);
-        return new CodeAnalysisResult
-        {
-            RawResponse = response,
-            ProjectPath = path,
-            Timestamp = DateTime.UtcNow
-        };
-    }
-
-    /// <summary>
-    /// 执行代码生成任务
-    /// </summary>
-    public async Task<CodeGenerationResult> GenerateCodeAsync(
-        string requirement,
-        string? outputPath = null,
-        CancellationToken ct = default)
-    {
-        var prompt = $"""
-            请根据以下需求生成代码:
-            {requirement}
-            """;
-
-        if (outputPath != null)
-        {
-            prompt += $"\n\n请将生成的代码保存到: {outputPath}";
-        }
-
-        var response = await SendAsync(prompt, yolo: true, ct: ct);
-        return new CodeGenerationResult
-        {
-            RawResponse = response,
-            Requirement = requirement,
-            OutputPath = outputPath,
-            Timestamp = DateTime.UtcNow
-        };
-    }
-
-    /// <summary>
-    /// 执行代码重构任务
-    /// </summary>
-    public async Task<CodeRefactorResult> RefactorCodeAsync(
-        string filePath,
-        string refactorGoal,
-        CancellationToken ct = default)
-    {
-        var prompt = $"""
-            请重构文件: {filePath}
-            重构目标: {refactorGoal}
-            请说明修改内容并执行重构。
-            """;
-
-        var response = await SendAsync(prompt, yolo: true, ct: ct);
-        return new CodeRefactorResult
-        {
-            RawResponse = response,
-            FilePath = filePath,
-            RefactorGoal = refactorGoal,
-            Timestamp = DateTime.UtcNow
-        };
-    }
-
-    /// <summary>
-    /// 清空历史记录（保留会话）
-    /// </summary>
-    public void ClearHistory()
-    {
-        _history.Clear();
-    }
-
-    public void Dispose()
-    {
-        _lock.Dispose();
-        GC.SuppressFinalize(this);
-    }
-}
-
-public class ChatMessage
-{
-    public string Role { get; set; } = string.Empty;
-    public string Content { get; set; } = string.Empty;
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-}
-
-public class CodeAnalysisResult
-{
-    public string RawResponse { get; set; } = string.Empty;
-    public string ProjectPath { get; set; } = string.Empty;
-    public DateTime Timestamp { get; set; }
-}
-
-public class CodeGenerationResult
-{
-    public string RawResponse { get; set; } = string.Empty;
-    public string Requirement { get; set; } = string.Empty;
-    public string? OutputPath { get; set; }
-    public DateTime Timestamp { get; set; }
-}
-
-public class CodeRefactorResult
-{
-    public string RawResponse { get; set; } = string.Empty;
-    public string FilePath { get; set; } = string.Empty;
-    public string RefactorGoal { get; set; } = string.Empty;
-    public DateTime Timestamp { get; set; }
-}
-```
-
-### 4. DI 扩展 (ServiceCollectionExtensions.cs)
-
-```csharp
-using KimiIntegration;
-using KimiIntegration.Models;
-using Microsoft.Extensions.DependencyInjection;
-
-namespace KimiIntegration;
-
-public static class ServiceCollectionExtensions
-{
-    /// <summary>
-    /// 添加 Kimi 服务客户端到 DI 容器
-    /// </summary>
-    public static IServiceCollection AddKimiService(
-        this IServiceCollection services,
-        Action<KimiServiceOptions>? configureOptions = null)
-    {
-        if (configureOptions != null)
-        {
-            services.Configure(configureOptions);
-        }
-
-        services.AddSingleton<KimiServiceClient>();
-        return services;
-    }
-
-    /// <summary>
-    /// 添加 Kimi Agent 会话工厂
-    /// </summary>
-    public static IServiceCollection AddKimiAgentSession(this IServiceCollection services)
-    {
-        services.AddScoped<KimiAgentSession>(sp =>
-        {
-            var client = sp.GetRequiredService<KimiServiceClient>();
-            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<KimiServiceOptions>>();
-            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<KimiAgentSession>>();
-
-            var workDir = options.Value.DefaultWorkDir
-                ?? throw new InvalidOperationException("DefaultWorkDir must be set");
-
-            return new KimiAgentSession(client, workDir, logger);
-        });
-
-        return services;
-    }
-}
-```
-
----
-
-## 使用示例
-
-### 基础用法
-
-```csharp
-using KimiIntegration;
-using KimiIntegration.Models;
-
-// 1. 配置并创建客户端
-var options = new KimiServiceOptions
-{
-    BaseUrl = "http://127.0.0.1:5494",
-    DefaultWorkDir = "/path/to/your/project",
-    AutoManageProcess = true,  // 自动启动/停止服务
-    Port = 5494
-};
-
-using var client = new KimiServiceClient(options);
-
-// 2. 简单问答（无上下文）
-var response = await client.ChatSimpleAsync("解释什么是依赖注入");
+// 发送消息并获取回复
+var response = await session.ChatAsync("用 C# 写一个 Hello World");
 Console.WriteLine(response);
 
-// 3. 带上下文的对话
-var chat = await client.ChatAsync("分析这个项目的架构");
-Console.WriteLine($"Session ID: {chat.SessionId}");
-
-// 继续同一对话
-var followUp = await client.ChatAsync("有哪些改进建议？", sessionId: chat.SessionId);
-Console.WriteLine(followUp.Response);
-
-// 4. 流式输出
-await foreach (var chunk in client.ChatStreamAsync("写一个快速排序算法"))
-{
-    Console.Write(chunk.Content);
-}
+// 断开连接
+session.Disconnect();
 ```
 
-### Agent 会话模式
+### 2. 流式输出
 
 ```csharp
-// 适合复杂的多轮任务
-using var client = new KimiServiceClient(options);
-
-await using var session = new KimiAgentSession(client, "/path/to/project");
-await session.InitializeAsync();
-
-// 多轮对话保持上下文
-var analysis = await session.AnalyzeProjectAsync();
-Console.WriteLine(analysis.RawResponse);
-
-var generated = await session.GenerateCodeAsync(
-    "创建一个用户认证服务，包含登录和注册功能",
-    "src/Services/AuthService.cs");
-Console.WriteLine(generated.RawResponse);
-
-// 查看会话历史
-foreach (var msg in session.History)
-{
-    Console.WriteLine($"[{msg.Role}]: {msg.Content[..Math.Min(100, msg.Content.Length)]}...");
-}
+// 实时接收 AI 回复的每个字符
+await session.ChatStreamingAsync(
+    "分析这个项目的代码结构",
+    onChunk: chunk => Console.Write(chunk),  // 实时输出
+    ct: cancellationToken
+);
 ```
 
-### ASP.NET Core 集成
+### 3. 多会话管理
 
 ```csharp
-// Program.cs
-using KimiIntegration;
-
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddKimiService(options =>
+// 列出所有会话
+var sessions = await session.ListSessionsAsync();
+foreach (var s in sessions)
 {
-    options.BaseUrl = builder.Configuration["Kimi:BaseUrl"]!;
-    options.DefaultWorkDir = builder.Configuration["Kimi:WorkDir"]!;
-    options.AutoManageProcess = true;
-    options.Port = 5494;
-});
+    Console.WriteLine($"{s.SessionId}: {s.Title}");
+}
 
-builder.Services.AddKimiAgentSession();
+// 恢复已有会话
+await session.ResumeSessionAsync("session-uuid-here");
 
-var app = builder.Build();
-
-// 使用示例
-app.MapPost("/api/analyze", async (
-    string projectPath,
-    KimiAgentSession session) =>
-{
-    await session.InitializeAsync();
-    var result = await session.AnalyzeProjectAsync(projectPath);
-    return Results.Ok(new { result.RawResponse, session.SessionId });
-});
-
-app.MapPost("/api/chat/{sessionId}", async (
-    string sessionId,
-    string message,
-    KimiAgentSession session) =>
-{
-    await session.ResumeAsync(sessionId);
-    var response = await session.SendAsync(message);
-    return Results.Ok(new { Response = response });
-});
-
-app.Run();
+// 继续对话（上下文保持）
+var response = await session.ChatAsync("基于刚才的分析给出改进建议");
 ```
 
-### 配置 appsettings.json
+## 完整 API 参考
 
-```json
+### KimiAcpClient (底层客户端)
+
+```csharp
+var client = new KimiAcpClient(logger);
+
+// 连接
+await client.ConnectAsync();
+
+// 初始化
+var init = await client.InitializeAsync();
+
+// 创建会话
+var session = await client.CreateSessionAsync("/workdir");
+
+// 发送消息（流式）
+client.OnSessionUpdate += (s, e) =>
 {
-  "Kimi": {
-    "BaseUrl": "http://127.0.0.1:5494",
-    "WorkDir": "/home/ubuntu/projects",
-    "Timeout": "00:05:00"
-  }
+    if (e.UpdateType == "agent_message_chunk")
+        Console.Write(e.Content);
+};
+
+var response = await client.SendPromptAsync(session.SessionId, "Hello");
+
+// 取消操作
+await client.CancelAsync(session.SessionId);
+```
+
+### KimiAcpSession (高级封装)
+
+```csharp
+var session = new KimiAcpSession("/workdir", logger);
+
+// 事件
+session.OnThoughtReceived += (s, thought) => 
+    Console.WriteLine($"[思考] {thought}");
+    
+session.OnMessageReceived += (s, message) => 
+    Console.WriteLine($"[回复] {message}");
+
+// 方法
+await session.ConnectAsync();
+await session.CreateSessionAsync();
+await session.LoadSessionAsync("session-id");
+await session.ResumeSessionAsync("session-id");
+
+// 聊天
+var reply = await session.ChatAsync("消息");
+await session.ChatStreamingAsync("消息", chunk => Console.Write(chunk));
+await session.CancelAsync();
+
+// 工具
+var thought = session.GetThoughtProcess();  // 获取思考过程
+```
+
+## ACP 协议说明
+
+### 方法列表
+
+| 方法 | 说明 |
+|------|------|
+| `initialize` | 初始化连接 |
+| `session/new` | 创建新会话 |
+| `session/list` | 列出会话 |
+| `session/load` | 加载会话 |
+| `session/resume` | 恢复会话 |
+| `session/prompt` | 发送消息（AI 聊天） |
+| `session/cancel` | 取消操作 |
+
+### 通知类型
+
+通过 `session/update` 通知接收流式输出：
+
+| UpdateType | 说明 |
+|------------|------|
+| `agent_thought_chunk` | AI 思考过程（流式） |
+| `agent_message_chunk` | AI 回复内容（流式） |
+| `available_commands_update` | 可用命令更新 |
+
+## 高级示例
+
+### 带取消令牌的聊天
+
+```csharp
+using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
+try
+{
+    var response = await session.ChatAsync("复杂任务...", cts.Token);
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("用户取消了操作");
 }
 ```
 
----
+### 多会话并发（每个会话独立连接）
+
+```csharp
+var session1 = new KimiAcpSession("/project/A");
+var session2 = new KimiAcpSession("/project/B");
+
+await Task.WhenAll(
+    session1.ConnectAsync(),
+    session2.ConnectAsync()
+);
+
+await Task.WhenAll(
+    session1.CreateSessionAsync(),
+    session2.CreateSessionAsync()
+);
+
+// 同时对话
+await Task.WhenAll(
+    session1.ChatAsync("分析项目 A"),
+    session2.ChatAsync("分析项目 B")
+);
+```
+
+### 保存和恢复对话历史
+
+```csharp
+// 保存会话 ID
+var sessionId = session.SessionId;
+await File.WriteAllTextAsync("session.txt", sessionId);
+
+// 之后恢复
+var savedId = await File.ReadAllTextAsync("session.txt");
+var newSession = new KimiAcpSession("/workdir");
+await newSession.ConnectAsync();
+await newSession.ResumeSessionAsync(savedId);
+
+// 继续对话（保持上下文）
+var response = await newSession.ChatAsync("继续刚才的话题");
+```
+
+## 错误处理
+
+```csharp
+try
+{
+    await session.ConnectAsync();
+}
+catch (FileNotFoundException)
+{
+    Console.WriteLine("kimi 命令未找到，请先安装 kimi-cli");
+}
+catch (InvalidOperationException ex)
+{
+    Console.WriteLine($"连接失败: {ex.Message}");
+}
+
+try
+{
+    var response = await session.ChatAsync("...");
+}
+catch (KimiAcpException ex) when (ex.ErrorCode == -32000)
+{
+    Console.WriteLine("需要登录，请运行: kimi login");
+}
+catch (TimeoutException)
+{
+    Console.WriteLine("AI 响应超时");
+}
+```
 
 ## 项目文件 (.csproj)
 
@@ -963,369 +265,42 @@ app.Run();
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
   </ItemGroup>
 
 </Project>
 ```
 
----
-
-## 最佳实践
-
-### 1. 会话管理策略
-
-#### 方案 A: 每次任务新建会话（隔离性好）
-
-```csharp
-var session = await client.CreateSessionAsync(workDir);
-// ... 执行任务 ...
-await client.DeleteSessionAsync(session.Id);
-```
-
-#### 方案 B: 长会话复用（上下文连贯）
-
-```csharp
-var response1 = await client.ChatAsync("分析代码", sessionId: "fixed-session");
-var response2 = await client.ChatAsync("基于分析结果重构", sessionId: "fixed-session");
-```
-
-#### 方案 C: 动态切换会话（多项目/多线程场景）
-
-```csharp
-// 同时管理多个会话，按需切换
-var sessionA = await client.CreateSessionAsync("/project/A");
-var sessionB = await client.CreateSessionAsync("/project/B");
-
-// 切换到项目 A 的上下文
-var respA = await client.ChatAsync("分析当前项目", sessionId: sessionA.Id);
-
-// 切换到项目 B 的上下文
-var respB = await client.ChatAsync("分析当前项目", sessionId: sessionB.Id);
-
-// 回到项目 A 继续之前的对话
-var respA2 = await client.ChatAsync("基于刚才的分析生成代码", sessionId: sessionA.Id);
-```
-
-#### 方案 D: 使用 KimiSessionManager 管理多会话
-
-```csharp
-using System.Collections.Concurrent;
-
-/// <summary>
-/// 多会话管理器 - 支持同时管理多个 Kimi 会话
-/// </summary>
-public class KimiSessionManager : IDisposable
-{
-    private readonly KimiServiceClient _client;
-    private readonly ConcurrentDictionary<string, SessionContext> _sessions = new();
-    private readonly string _defaultWorkDir;
-
-    public KimiSessionManager(KimiServiceClient client, string defaultWorkDir)
-    {
-        _client = client;
-        _defaultWorkDir = defaultWorkDir;
-    }
-
-    /// <summary>
-    /// 创建新会话
-    /// </summary>
-    public async Task<string> CreateSessionAsync(
-        string? name = null,
-        string? workDir = null,
-        CancellationToken ct = default)
-    {
-        var session = await _client.CreateSessionAsync(workDir ?? _defaultWorkDir, ct);
-        var context = new SessionContext
-        {
-            Id = session.Id,
-            Name = name ?? $"Session_{session.Id[..8]}",
-            WorkDir = workDir ?? _defaultWorkDir,
-            CreatedAt = DateTime.UtcNow
-        };
-        _sessions[context.Id] = context;
-        return context.Id;
-    }
-
-    /// <summary>
-    /// 切换到已有会话并发送消息
-    /// </summary>
-    public async Task<string> ChatAsync(
-        string sessionId,
-        string message,
-        bool yolo = true,
-        CancellationToken ct = default)
-    {
-        if (!_sessions.ContainsKey(sessionId))
-        {
-            // 尝试恢复已存在的会话
-            var session = await _client.GetSessionAsync(sessionId, ct);
-            if (session == null)
-                throw new InvalidOperationException($"Session {sessionId} not found");
-            
-            _sessions[sessionId] = new SessionContext
-            {
-                Id = sessionId,
-                Name = $"Restored_{sessionId[..8]}",
-                WorkDir = session.WorkDir,
-                CreatedAt = session.CreatedAt
-            };
-        }
-
-        var context = _sessions[sessionId];
-        var response = await _client.ChatAsync(message, sessionId, context.WorkDir, yolo, ct);
-        
-        context.LastActivity = DateTime.UtcNow;
-        context.MessageCount++;
-        
-        return response.Response;
-    }
-
-    /// <summary>
-    /// 切换默认会话（简化后续调用）
-    /// </summary>
-    public string? CurrentSessionId { get; private set; }
-
-    public void SwitchSession(string sessionId)
-    {
-        if (!_sessions.ContainsKey(sessionId))
-            throw new InvalidOperationException($"Session {sessionId} not registered");
-        
-        CurrentSessionId = sessionId;
-    }
-
-    /// <summary>
-    /// 使用当前默认会话发送消息
-    /// </summary>
-    public async Task<string> ChatWithCurrentAsync(
-        string message,
-        bool yolo = true,
-        CancellationToken ct = default)
-    {
-        if (CurrentSessionId == null)
-            throw new InvalidOperationException("No current session set. Call SwitchSession first.");
-        
-        return await ChatAsync(CurrentSessionId, message, yolo, ct);
-    }
-
-    /// <summary>
-    /// 获取所有管理的会话
-    /// </summary>
-    public IReadOnlyList<SessionContext> GetAllSessions() => _sessions.Values.ToList().AsReadOnly();
-
-    /// <summary>
-    /// 删除会话
-    /// </summary>
-    public async Task<bool> RemoveSessionAsync(string sessionId, CancellationToken ct = default)
-    {
-        if (_sessions.TryRemove(sessionId, out _))
-        {
-            await _client.DeleteSessionAsync(sessionId, ct);
-            if (CurrentSessionId == sessionId)
-                CurrentSessionId = null;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 清理所有过期会话
-    /// </summary>
-    public async Task CleanupInactiveSessions(TimeSpan maxInactiveTime, CancellationToken ct = default)
-    {
-        var cutoff = DateTime.UtcNow - maxInactiveTime;
-        var toRemove = _sessions.Values.Where(s => s.LastActivity < cutoff).ToList();
-        
-        foreach (var session in toRemove)
-        {
-            await RemoveSessionAsync(session.Id, ct);
-        }
-    }
-
-    public void Dispose()
-    {
-        foreach (var sessionId in _sessions.Keys)
-        {
-            try
-            {
-                _client.DeleteSessionAsync(sessionId).Wait(TimeSpan.FromSeconds(5));
-            }
-            catch { /* ignore */ }
-        }
-        _sessions.Clear();
-    }
-}
-
-public class SessionContext
-{
-    public string Id { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string WorkDir { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; }
-    public DateTime LastActivity { get; set; }
-    public int MessageCount { get; set; }
-}
-```
-
-**使用示例 - 多会话管理：**
-
-```csharp
-using var client = new KimiServiceClient(options);
-var manager = new KimiSessionManager(client, "/projects");
-
-// 创建多个项目会话
-var webAppId = await manager.CreateSessionAsync("WebApp", "/projects/web");
-var apiId = await manager.CreateSessionAsync("API", "/projects/api");
-var docId = await manager.CreateSessionAsync("Docs", "/projects/docs");
-
-// 在 WebApp 项目中工作
-manager.SwitchSession(webAppId);
-var resp1 = await manager.ChatWithCurrentAsync("分析前端架构");
-var resp2 = await manager.ChatWithCurrentAsync("有哪些性能问题？");  // 保持上下文
-
-// 切换到 API 项目
-manager.SwitchSession(apiId);
-var resp3 = await manager.ChatWithCurrentAsync("设计用户认证接口");
-
-// 再回到 WebApp 项目（上下文还在）
-manager.SwitchSession(webAppId);
-var resp4 = await manager.ChatWithCurrentAsync("根据刚才的分析重构代码");  // 还记得之前的内容
-
-// 查看所有会话
-foreach (var session in manager.GetAllSessions())
-{
-    Console.WriteLine($"{session.Name}: {session.MessageCount} messages");
-}
-
-// 清理旧会话
-await manager.CleanupInactiveSessions(TimeSpan.FromHours(1));
-```
-
-### 2. 错误处理和重试
-
-```csharp
-public async Task<string> RobustChatAsync(string message, int maxRetries = 3)
-{
-    for (int i = 0; i < maxRetries; i++)
-    {
-        try
-        {
-            return await _client.ChatSimpleAsync(message);
-        }
-        catch (KimiServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
-        {
-            if (i == maxRetries - 1) throw;
-            await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i))); // 指数退避
-        }
-    }
-    throw new InvalidOperationException("Unexpected");
-}
-```
-
-### 3. 并发控制
-
-```csharp
-// Kimi CLI 同一时间只能处理一个请求
-// 使用 SemaphoreSlim 控制并发
-private readonly SemaphoreSlim _kimiLock = new(1, 1);
-
-public async Task ProcessBatchAsync(List<string> tasks)
-{
-    foreach (var task in tasks)
-    {
-        await _kimiLock.WaitAsync();
-        try
-        {
-            await _client.ChatSimpleAsync(task);
-        }
-        finally
-        {
-            _kimiLock.Release();
-        }
-    }
-}
-```
-
-### 4. 日志记录
-
-```csharp
-using Microsoft.Extensions.Logging;
-
-// 启用详细日志
-var loggerFactory = LoggerFactory.Create(builder =>
-{
-    builder.AddConsole();
-    builder.SetMinimumLevel(LogLevel.Debug);
-});
-
-var client = new KimiServiceClient(options, loggerFactory.CreateLogger<KimiServiceClient>());
-```
-
----
-
 ## 故障排除
 
-### 问题：连接被拒绝
+### ACP 服务无法启动
 
 ```bash
-# 检查服务是否运行
-curl http://127.0.0.1:5494/health
+# 检查 kimi 是否安装
+which kimi
+kimi --version
 
-# 手动启动服务测试
-kimi web --port 5494 --no-open --verbose
+# 检查是否已登录
+kimi login
+
+# 手动测试 ACP
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | kimi acp
 ```
 
-### 问题：超时
+### 会话未找到
 
-```csharp
-// 增加超时时间
-var options = new KimiServiceOptions
-{
-    Timeout = TimeSpan.FromMinutes(10)  // 复杂任务需要更长时间
-};
-```
+- 确保使用正确的 `sessionId`
+- 检查工作目录是否正确
+- 会话可能被其他进程删除
 
-### 问题：会话丢失
+### 超时
 
-```csharp
-// 定期保存会话 ID
-var sessionId = chat.SessionId;
-await File.WriteAllTextAsync("session.id", sessionId);
-
-// 恢复会话
-var savedId = await File.ReadAllTextAsync("session.id");
-var response = await client.ChatAsync("继续", sessionId: savedId);
-```
-
----
-
-## API 端点参考
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/health` | GET | 健康检查 |
-| `/api/chat` | POST | 单次聊天 |
-| `/api/chat/stream` | POST | 流式聊天 |
-| `/api/sessions` | GET | 列出所有会话 |
-| `/api/sessions` | POST | 创建新会话 |
-| `/api/sessions/{id}` | GET | 获取会话详情 |
-| `/api/sessions/{id}` | DELETE | 删除会话 |
-
----
-
-## 安全注意事项
-
-1. **YOLO 模式**: 生产环境谨慎使用 `--yolo`，会自动执行文件修改和命令
-2. **工作目录**: 限制 Kimi 可访问的文件范围
-3. **API 密钥**: 通过环境变量或配置文件管理，不要硬编码
-4. **网络暴露**: `kimi web` 默认只监听 localhost，不要直接暴露到公网
-
----
+- 默认超时时间为 5 分钟
+- 复杂任务可能需要更长时间
+- 使用 `CancellationToken` 控制超时
 
 ## 相关文档
 
 - [Kimi CLI 官方文档](https://moonshotai.github.io/kimi-cli/)
+- [ACP 协议说明](https://agentclientprotocol.com/)
 - [Kimi CLI GitHub](https://github.com/MoonshotAI/kimi-cli)

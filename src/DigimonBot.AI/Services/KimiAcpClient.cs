@@ -1,0 +1,695 @@
+using System.Diagnostics;
+using System.IO.Pipes;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+
+namespace DigimonBot.AI.Services;
+
+/// <summary>
+/// Kimi ACP (Agent Client Protocol) 客户端
+/// 通过 JSON-RPC over stdio 与 kimi acp 服务通信
+/// 
+/// 协议说明:
+/// - 请求格式: {"jsonrpc":"2.0","id":1,"method":"method/name","params":{}}
+/// - 响应格式: {"jsonrpc":"2.0","id":1,"result":{}} 或 {"jsonrpc":"2.0","id":1,"error":{}}
+/// - 通知格式: {"jsonrpc":"2.0","method":"method/name","params":{}} (无 id)
+/// </summary>
+public class KimiAcpClient : IDisposable
+{
+    private Process? _process;
+    private StreamWriter? _stdin;
+    private StreamReader? _stdout;
+    private StreamReader? _stderr;
+    private readonly ILogger<KimiAcpClient>? _logger;
+    private readonly string _kimiExecutablePath;
+    private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
+    private readonly CancellationTokenSource _cts = new();
+    private int _nextId = 1;
+    private bool _isInitialized = false;
+    private readonly object _lock = new();
+
+    // 事件：会话更新通知（流式输出）
+    public event EventHandler<SessionUpdateEventArgs>? OnSessionUpdate;
+    public event EventHandler<string>? OnError;
+    public event EventHandler? OnDisconnected;
+
+    public bool IsConnected => _process?.HasExited == false;
+    public bool IsInitialized => _isInitialized;
+
+    public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null)
+    {
+        _logger = logger;
+        _kimiExecutablePath = kimiExecutablePath ?? FindKimiExecutable();
+    }
+
+    #region 连接管理
+
+    /// <summary>
+    /// 启动并连接到 kimi acp 服务
+    /// </summary>
+    public async Task ConnectAsync(CancellationToken ct = default)
+    {
+        if (_process?.HasExited == false)
+        {
+            _logger?.LogWarning("[KimiAcp] 已经连接到 ACP 服务");
+            return;
+        }
+
+        _logger?.LogInformation("[KimiAcp] 正在启动 ACP 服务...");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = _kimiExecutablePath,
+            Arguments = "acp",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        _process = new Process { StartInfo = psi };
+        _process.Start();
+
+        _stdin = _process.StandardInput;
+        _stdout = _process.StandardOutput;
+        _stderr = _process.StandardError;
+
+        // 启动后台读取任务
+        _ = Task.Run(() => ReadOutputLoopAsync(_cts.Token));
+        _ = Task.Run(() => ReadErrorLoopAsync(_cts.Token));
+
+        // 等待进程启动
+        await Task.Delay(500, ct);
+
+        if (_process.HasExited)
+        {
+            throw new InvalidOperationException("ACP 服务启动失败");
+        }
+
+        _logger?.LogInformation("[KimiAcp] ACP 服务已启动");
+    }
+
+    /// <summary>
+    /// 断开连接并清理资源
+    /// </summary>
+    public void Disconnect()
+    {
+        _cts.Cancel();
+        
+        try
+        {
+            _stdin?.Close();
+        }
+        catch { }
+
+        if (_process?.HasExited == false)
+        {
+            try
+            {
+                _process.Kill(entireProcessTree: true);
+                _process.WaitForExit(5000);
+            }
+            catch { }
+        }
+
+        _process?.Dispose();
+        _process = null;
+        _isInitialized = false;
+        
+        OnDisconnected?.Invoke(this, EventArgs.Empty);
+        _logger?.LogInformation("[KimiAcp] ACP 服务已停止");
+    }
+
+    private async Task ReadOutputLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && _stdout != null)
+            {
+                var line = await _stdout.ReadLineAsync(ct);
+                if (line == null) break;
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                _logger?.LogDebug("[KimiAcp] <- {Line}", line);
+
+                try
+                {
+                    var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+
+                    // 检查是响应还是通知
+                    if (root.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.Number)
+                    {
+                        // 这是响应
+                        var id = idElement.GetInt32();
+                        lock (_lock)
+                        {
+                            if (_pendingRequests.TryGetValue(id, out var tcs))
+                            {
+                                if (root.TryGetProperty("result", out var result))
+                                {
+                                    tcs.TrySetResult(result.Clone());
+                                }
+                                else if (root.TryGetProperty("error", out var error))
+                                {
+                                    var errorMsg = error.GetProperty("message").GetString() ?? "Unknown error";
+                                    var errorCode = error.TryGetProperty("code", out var code) ? code.GetInt32() : 0;
+                                    tcs.TrySetException(new KimiAcpException(errorMsg, errorCode));
+                                }
+                                _pendingRequests.Remove(id);
+                            }
+                        }
+                    }
+                    else if (root.TryGetProperty("method", out var methodElement))
+                    {
+                        // 这是通知
+                        var method = methodElement.GetString();
+                        if (method == "session/update" && root.TryGetProperty("params", out var paramsElement))
+                        {
+                            HandleSessionUpdate(paramsElement.Clone());
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger?.LogWarning(ex, "[KimiAcp] 无法解析 JSON: {Line}", line);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常取消
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[KimiAcp] 读取输出时出错");
+        }
+    }
+
+    private async Task ReadErrorLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && _stderr != null)
+            {
+                var line = await _stderr.ReadLineAsync(ct);
+                if (line == null) break;
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    _logger?.LogWarning("[KimiAcp] stderr: {Line}", line);
+                    OnError?.Invoke(this, line);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常取消
+        }
+    }
+
+    private void HandleSessionUpdate(JsonElement paramsElement)
+    {
+        try
+        {
+            var sessionId = paramsElement.GetProperty("sessionId").GetString() ?? "";
+            var update = paramsElement.GetProperty("update");
+            var updateType = update.GetProperty("sessionUpdate").GetString() ?? "";
+
+            string? content = null;
+            if (update.TryGetProperty("content", out var contentElement) && 
+                contentElement.TryGetProperty("text", out var textElement))
+            {
+                content = textElement.GetString();
+            }
+
+            OnSessionUpdate?.Invoke(this, new SessionUpdateEventArgs
+            {
+                SessionId = sessionId,
+                UpdateType = updateType,
+                Content = content
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[KimiAcp] 处理 session/update 失败");
+        }
+    }
+
+    private async Task<JsonElement> SendRequestAsync(string method, object? parameters, CancellationToken ct)
+    {
+        if (_process?.HasExited != false)
+            throw new InvalidOperationException("ACP 服务未连接");
+
+        var id = Interlocked.Increment(ref _nextId);
+        var tcs = new TaskCompletionSource<JsonElement>();
+
+        lock (_lock)
+        {
+            _pendingRequests[id] = tcs;
+        }
+
+        var request = new JsonRpcRequest
+        {
+            JsonRpc = "2.0",
+            Id = id,
+            Method = method,
+            Params = parameters
+        };
+
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        _logger?.LogDebug("[KimiAcp] -> {Json}", json);
+
+        await _stdin!.WriteLineAsync(json);
+        await _stdin.FlushAsync();
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(5)); // 5 分钟超时
+
+        try
+        {
+            return await tcs.Task.WaitAsync(cts.Token);
+        }
+        catch (TimeoutException)
+        {
+            lock (_lock)
+            {
+                _pendingRequests.Remove(id);
+            }
+            throw new TimeoutException($"请求 {method} 超时");
+        }
+    }
+
+    #endregion
+
+    #region ACP 方法
+
+    /// <summary>
+    /// 初始化连接
+    /// </summary>
+    public async Task<InitializeResponse> InitializeAsync(CancellationToken ct = default)
+    {
+        var result = await SendRequestAsync("initialize", new InitializeParams
+        {
+            ProtocolVersion = 1,
+            Capabilities = new(),
+            ClientInfo = new Implementation { Name = "DigimonBot", Version = "1.0" }
+        }, ct);
+
+        _isInitialized = true;
+        return JsonSerializer.Deserialize<InitializeResponse>(result.GetRawText(), JsonOptions)!;
+    }
+
+    /// <summary>
+    /// 创建新会话
+    /// </summary>
+    public async Task<NewSessionResponse> CreateSessionAsync(string cwd, CancellationToken ct = default)
+    {
+        var result = await SendRequestAsync("session/new", new NewSessionParams
+        {
+            Cwd = cwd,
+            McpServers = new List<object>()
+        }, ct);
+
+        return JsonSerializer.Deserialize<NewSessionResponse>(result.GetRawText(), JsonOptions)!;
+    }
+
+    /// <summary>
+    /// 列出会话
+    /// </summary>
+    public async Task<ListSessionsResponse> ListSessionsAsync(string? cwd = null, CancellationToken ct = default)
+    {
+        var result = await SendRequestAsync("session/list", new ListSessionsParams
+        {
+            Cwd = cwd
+        }, ct);
+
+        return JsonSerializer.Deserialize<ListSessionsResponse>(result.GetRawText(), JsonOptions)!;
+    }
+
+    /// <summary>
+    /// 加载已有会话
+    /// </summary>
+    public async Task LoadSessionAsync(string cwd, string sessionId, CancellationToken ct = default)
+    {
+        await SendRequestAsync("session/load", new LoadSessionParams
+        {
+            Cwd = cwd,
+            SessionId = sessionId,
+            McpServers = new List<object>()
+        }, ct);
+    }
+
+    /// <summary>
+    /// 恢复会话
+    /// </summary>
+    public async Task<ResumeSessionResponse> ResumeSessionAsync(string cwd, string sessionId, CancellationToken ct = default)
+    {
+        var result = await SendRequestAsync("session/resume", new ResumeSessionParams
+        {
+            Cwd = cwd,
+            SessionId = sessionId,
+            McpServers = new List<object>()
+        }, ct);
+
+        return JsonSerializer.Deserialize<ResumeSessionResponse>(result.GetRawText(), JsonOptions)!;
+    }
+
+    /// <summary>
+    /// 发送消息（AI 聊天）
+    /// </summary>
+    /// <param name="sessionId">会话 ID</param>
+    /// <param name="prompt">消息内容</param>
+    /// <param name="ct">取消令牌</param>
+    /// <returns>提示响应（包含 stopReason）</returns>
+    public async Task<PromptResponse> SendPromptAsync(string sessionId, string prompt, CancellationToken ct = default)
+    {
+        var result = await SendRequestAsync("session/prompt", new PromptParams
+        {
+            SessionId = sessionId,
+            Prompt = new List<ContentBlock>
+            {
+                new() { Type = "text", Text = prompt }
+            }
+        }, ct);
+
+        return JsonSerializer.Deserialize<PromptResponse>(result.GetRawText(), JsonOptions)!;
+    }
+
+    /// <summary>
+    /// 取消当前操作
+    /// </summary>
+    public async Task CancelAsync(string sessionId, CancellationToken ct = default)
+    {
+        await SendRequestAsync("session/cancel", new { sessionId }, ct);
+    }
+
+    #endregion
+
+    #region 工具方法
+
+    private static string FindKimiExecutable()
+    {
+        var candidates = new[]
+        {
+            "kimi",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "kimi"),
+            "/usr/local/bin/kimi",
+            "/usr/bin/kimi"
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate == "kimi" || File.Exists(candidate))
+                return candidate;
+        }
+
+        throw new FileNotFoundException("无法找到 kimi 可执行文件");
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false
+    };
+
+    public void Dispose()
+    {
+        Disconnect();
+        _cts.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    #endregion
+}
+
+#region 数据模型
+
+public class JsonRpcRequest
+{
+    [JsonPropertyName("jsonrpc")]
+    public string JsonRpc { get; set; } = "2.0";
+
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("method")]
+    public string Method { get; set; } = string.Empty;
+
+    [JsonPropertyName("params")]
+    public object? Params { get; set; }
+}
+
+public class InitializeParams
+{
+    [JsonPropertyName("protocolVersion")]
+    public int ProtocolVersion { get; set; }
+
+    [JsonPropertyName("capabilities")]
+    public Dictionary<string, object> Capabilities { get; set; } = new();
+
+    [JsonPropertyName("clientInfo")]
+    public Implementation ClientInfo { get; set; } = new();
+}
+
+public class Implementation
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = string.Empty;
+}
+
+public class InitializeResponse
+{
+    [JsonPropertyName("protocolVersion")]
+    public int ProtocolVersion { get; set; }
+
+    [JsonPropertyName("agentCapabilities")]
+    public AgentCapabilities AgentCapabilities { get; set; } = new();
+
+    [JsonPropertyName("agentInfo")]
+    public Implementation AgentInfo { get; set; } = new();
+
+    [JsonPropertyName("authMethods")]
+    public List<AuthMethod> AuthMethods { get; set; } = new();
+}
+
+public class AgentCapabilities
+{
+    [JsonPropertyName("loadSession")]
+    public bool LoadSession { get; set; }
+
+    [JsonPropertyName("promptCapabilities")]
+    public PromptCapabilities PromptCapabilities { get; set; } = new();
+
+    [JsonPropertyName("mcpCapabilities")]
+    public McpCapabilities McpCapabilities { get; set; } = new();
+
+    [JsonPropertyName("sessionCapabilities")]
+    public SessionCapabilities SessionCapabilities { get; set; } = new();
+}
+
+public class PromptCapabilities
+{
+    [JsonPropertyName("embeddedContext")]
+    public bool EmbeddedContext { get; set; }
+
+    [JsonPropertyName("image")]
+    public bool Image { get; set; }
+
+    [JsonPropertyName("audio")]
+    public bool Audio { get; set; }
+}
+
+public class McpCapabilities
+{
+    [JsonPropertyName("http")]
+    public bool Http { get; set; }
+
+    [JsonPropertyName("sse")]
+    public bool Sse { get; set; }
+}
+
+public class SessionCapabilities
+{
+    [JsonPropertyName("list")]
+    public object List { get; set; } = new();
+
+    [JsonPropertyName("resume")]
+    public object Resume { get; set; } = new();
+}
+
+public class AuthMethod
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+}
+
+public class NewSessionParams
+{
+    [JsonPropertyName("cwd")]
+    public string Cwd { get; set; } = string.Empty;
+
+    [JsonPropertyName("mcpServers")]
+    public List<object> McpServers { get; set; } = new();
+}
+
+public class NewSessionResponse
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("modes")]
+    public SessionModeState Modes { get; set; } = new();
+
+    [JsonPropertyName("models")]
+    public SessionModelState Models { get; set; } = new();
+}
+
+public class SessionModeState
+{
+    [JsonPropertyName("availableModes")]
+    public List<SessionMode> AvailableModes { get; set; } = new();
+
+    [JsonPropertyName("currentModeId")]
+    public string CurrentModeId { get; set; } = string.Empty;
+}
+
+public class SessionMode
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+}
+
+public class SessionModelState
+{
+    [JsonPropertyName("availableModels")]
+    public List<ModelInfo> AvailableModels { get; set; } = new();
+
+    [JsonPropertyName("currentModelId")]
+    public string CurrentModelId { get; set; } = string.Empty;
+}
+
+public class ModelInfo
+{
+    [JsonPropertyName("modelId")]
+    public string ModelId { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+}
+
+public class ListSessionsParams
+{
+    [JsonPropertyName("cwd")]
+    public string? Cwd { get; set; }
+
+    [JsonPropertyName("cursor")]
+    public string? Cursor { get; set; }
+}
+
+public class ListSessionsResponse
+{
+    [JsonPropertyName("sessions")]
+    public List<SessionInfo> Sessions { get; set; } = new();
+
+    [JsonPropertyName("nextCursor")]
+    public string? NextCursor { get; set; }
+}
+
+public class SessionInfo
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("cwd")]
+    public string Cwd { get; set; } = string.Empty;
+
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    [JsonPropertyName("updatedAt")]
+    public string UpdatedAt { get; set; } = string.Empty;
+}
+
+public class LoadSessionParams
+{
+    [JsonPropertyName("cwd")]
+    public string Cwd { get; set; } = string.Empty;
+
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("mcpServers")]
+    public List<object> McpServers { get; set; } = new();
+}
+
+public class ResumeSessionParams : LoadSessionParams { }
+
+public class ResumeSessionResponse
+{
+    [JsonPropertyName("modes")]
+    public SessionModeState Modes { get; set; } = new();
+
+    [JsonPropertyName("models")]
+    public SessionModelState Models { get; set; } = new();
+}
+
+public class PromptParams
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("prompt")]
+    public List<ContentBlock> Prompt { get; set; } = new();
+}
+
+public class ContentBlock
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "text";
+
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = string.Empty;
+}
+
+public class PromptResponse
+{
+    [JsonPropertyName("stopReason")]
+    public string StopReason { get; set; } = string.Empty;
+}
+
+public class SessionUpdateEventArgs : EventArgs
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string UpdateType { get; set; } = string.Empty;
+    public string? Content { get; set; }
+}
+
+public class KimiAcpException : Exception
+{
+    public int ErrorCode { get; }
+
+    public KimiAcpException(string message, int errorCode) : base(message)
+    {
+        ErrorCode = errorCode;
+    }
+}
+
+#endregion
