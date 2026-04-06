@@ -325,6 +325,7 @@ public class Program
                         provider.GetRequiredService<IKimiRepositoryManager>(),
                         provider.GetRequiredService<IKimiExecutionService>(),
                         provider.GetRequiredService<IKimiRepositoryRepository>(),
+                        provider.GetRequiredService<IKimiServiceClient>(),
                         () =>
                         {
                             var currentCfg = kimiConfigSvc.CurrentConfig;

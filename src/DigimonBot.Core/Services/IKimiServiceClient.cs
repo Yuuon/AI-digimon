@@ -43,6 +43,11 @@ public interface IKimiServiceClient : IDisposable
     Task<KimiSessionInfo?> GetSessionAsync(string sessionId, CancellationToken ct = default);
 
     /// <summary>
+    /// 列出所有活跃会话
+    /// </summary>
+    Task<List<KimiSessionInfo>> ListSessionsAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// 删除会话
     /// </summary>
     Task<bool> DeleteSessionAsync(string sessionId, CancellationToken ct = default);

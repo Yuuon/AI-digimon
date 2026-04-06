@@ -24,10 +24,15 @@ public class KimiExecutionService : IKimiExecutionService
 
     public async Task<ExecutionResult> ExecuteAsync(string workDir, string message, int timeoutSeconds, CancellationToken cancellationToken = default)
     {
+        return await ExecuteAsync(workDir, message, null, timeoutSeconds, cancellationToken);
+    }
+
+    public async Task<ExecutionResult> ExecuteAsync(string workDir, string message, string? sessionId, int timeoutSeconds, CancellationToken cancellationToken = default)
+    {
         var stopwatch = Stopwatch.StartNew();
 
-        _logger.LogInformation("[KimiExec] 开始执行: 消息={Message}, 工作目录={Dir}, 超时={Timeout}s",
-            message.Length > 100 ? message[..100] + "..." : message, workDir, timeoutSeconds);
+        _logger.LogInformation("[KimiExec] 开始执行: 消息={Message}, 工作目录={Dir}, 会话={Session}, 超时={Timeout}s",
+            message.Length > 100 ? message[..100] + "..." : message, workDir, sessionId ?? "(新会话)", timeoutSeconds);
 
         try
         {
@@ -38,6 +43,7 @@ public class KimiExecutionService : IKimiExecutionService
             // 通过 HTTP API 发送聊天请求
             var chatResponse = await _serviceClient.ChatAsync(
                 message: message,
+                sessionId: sessionId,
                 workDir: workDir,
                 yolo: true,
                 ct: linkedCts.Token);
