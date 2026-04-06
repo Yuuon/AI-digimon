@@ -381,15 +381,12 @@ public class Program
                         kimiConfig.CurrentConfig.Git.DefaultBranch);
                 });
 
-                // 注册 Kimi Web 服务客户端（HTTP API 方式）
+                // 注册 Kimi ACP 服务客户端（JSON-RPC over stdio 方式）
                 services.AddSingleton<IKimiServiceClient>(provider =>
                 {
                     var kimiConfig = provider.GetRequiredService<KimiConfigService>();
                     var options = new DigimonBot.Core.Models.Kimi.KimiServiceOptions
                     {
-                        BaseUrl = kimiConfig.CurrentConfig.Execution.KimiWebBaseUrl,
-                        Port = kimiConfig.CurrentConfig.Execution.KimiWebPort,
-                        AutoManageProcess = kimiConfig.CurrentConfig.Execution.AutoManageKimiWeb,
                         KimiExecutablePath = kimiConfig.CurrentConfig.Execution.KimiCliPath,
                         DefaultWorkDir = kimiConfig.CurrentConfig.Execution.BasePath,
                         TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds

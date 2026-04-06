@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace DigimonBot.Messaging.Commands;
 
 /// <summary>
-/// Kimi代码助手命令 - 通过 Kimi Web HTTP API 进行AI辅助编程
-/// 流程：用户发送聊天消息 → 通过HTTP调用Kimi服务 → 自动提交Git → 返回摘要消息+克隆链接
+/// Kimi代码助手命令 - 通过 Kimi ACP 协议进行AI辅助编程
+/// 流程：用户发送聊天消息 → 通过ACP协议调用Kimi服务 → 自动提交Git → 返回摘要消息+克隆链接
 /// </summary>
 public class KimiCommand : ICommand
 {
@@ -541,7 +541,7 @@ public class KimiCommand : ICommand
             await _repoRepository.UpdateLastUsedAsync(repo.Name);
             await _repoRepository.IncrementSessionCountAsync(repo.Name);
 
-            // 通过 HTTP API 执行 Kimi 聊天（传递当前会话ID以维持上下文）
+            // 通过 ACP 协议执行 Kimi 聊天（传递当前会话ID以维持上下文）
             var result = await _executionService.ExecuteAsync(repo.Path, chatMessage, _currentSessionId, config.DefaultTimeoutSeconds, cancellationToken);
 
             // 跟踪返回的会话ID，后续消息将复用同一会话

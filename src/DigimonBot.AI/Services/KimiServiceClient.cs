@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using System.Net.Http.Json;
+using System.Text;
 using DigimonBot.Core.Models.Kimi;
 using DigimonBot.Core.Services;
 using Microsoft.Extensions.Logging;
@@ -7,17 +6,17 @@ using Microsoft.Extensions.Logging;
 namespace DigimonBot.AI.Services;
 
 /// <summary>
-/// Kimi Web 服务客户端 - 通过 HTTP API 与 kimi web 服务通信
-/// 遵循 KimiServiceClient.md 官方指南实现
+/// Kimi ACP 服务客户端 - 通过 JSON-RPC over stdio 与 kimi acp 服务通信
+/// 替代原有的 HTTP Web 服务方式，使用 KimiAcpClient 进行底层通信
 /// </summary>
 public class KimiServiceClient : IKimiServiceClient
 {
-    private readonly HttpClient _httpClient;
     private readonly KimiServiceOptions _options;
     private readonly ILogger<KimiServiceClient> _logger;
-    private Process? _kimiProcess;
+    private KimiAcpClient? _client;
     private bool _isDisposed;
-    private readonly SemaphoreSlim _processLock = new(1, 1);
+    private readonly SemaphoreSlim _connectLock = new(1, 1);
+    private readonly SemaphoreSlim _chatLock = new(1, 1);
 
     public KimiServiceClient(
         KimiServiceOptions options,
@@ -25,12 +24,6 @@ public class KimiServiceClient : IKimiServiceClient
     {
         _options = options;
         _logger = logger;
-
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(_options.BaseUrl),
-            Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds)
-        };
     }
 
     #region 服务生命周期管理
@@ -38,127 +31,59 @@ public class KimiServiceClient : IKimiServiceClient
     /// <inheritdoc/>
     public async Task EnsureServiceRunningAsync(CancellationToken ct = default)
     {
-        if (!_options.AutoManageProcess) return;
+        if (_client?.IsConnected == true && _client.IsInitialized)
+            return;
 
-        await _processLock.WaitAsync(ct);
+        await _connectLock.WaitAsync(ct);
         try
         {
-            if (_kimiProcess?.HasExited == false) return;
+            // Double-check after acquiring lock
+            if (_client?.IsConnected == true && _client.IsInitialized)
+                return;
 
-            _logger.LogInformation("[KimiService] 正在启动 Kimi Web 服务...");
+            _logger.LogInformation("[KimiService] 正在连接 Kimi ACP 服务...");
 
-            var executable = FindKimiExecutable();
-            var arguments = $"web --port {_options.Port} --no-open";
+            // Dispose old client if exists
+            _client?.Dispose();
 
-            if (!string.IsNullOrEmpty(_options.DefaultWorkDir))
-            {
-                arguments += $" --work-dir \"{_options.DefaultWorkDir}\"";
-            }
+            _client = new KimiAcpClient(
+                kimiExecutablePath: string.IsNullOrEmpty(_options.KimiExecutablePath)
+                    ? null
+                    : _options.KimiExecutablePath);
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = executable,
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            await _client.ConnectAsync(ct);
+            var initResult = await _client.InitializeAsync(ct);
 
-            _kimiProcess = new Process { StartInfo = psi };
-            _kimiProcess.OutputDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                    _logger.LogDebug("[KimiWeb] {Output}", e.Data);
-            };
-            _kimiProcess.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                    _logger.LogWarning("[KimiWeb] {Error}", e.Data);
-            };
-
-            _kimiProcess.Start();
-            _kimiProcess.BeginOutputReadLine();
-            _kimiProcess.BeginErrorReadLine();
-
-            // 等待服务就绪
-            await WaitForServiceReadyAsync(ct);
-            _logger.LogInformation("[KimiService] Kimi Web 服务已启动，端口: {Port}", _options.Port);
+            _logger.LogInformation(
+                "[KimiService] ACP 服务已连接: {AgentName} v{AgentVersion}",
+                initResult.AgentInfo.Name,
+                initResult.AgentInfo.Version);
         }
         finally
         {
-            _processLock.Release();
+            _connectLock.Release();
         }
     }
 
     /// <inheritdoc/>
     public async Task StopServiceAsync(CancellationToken ct = default)
     {
-        if (!_options.AutoManageProcess || _kimiProcess == null) return;
-
-        await _processLock.WaitAsync(ct);
+        await _connectLock.WaitAsync(ct);
         try
         {
-            if (_kimiProcess?.HasExited == false)
+            if (_client != null)
             {
-                _logger.LogInformation("[KimiService] 正在停止 Kimi Web 服务...");
-                _kimiProcess.Kill(entireProcessTree: true);
-                await _kimiProcess.WaitForExitAsync(ct);
-                _logger.LogInformation("[KimiService] Kimi Web 服务已停止");
+                _logger.LogInformation("[KimiService] 正在断开 Kimi ACP 服务...");
+                _client.Disconnect();
+                _client.Dispose();
+                _client = null;
+                _logger.LogInformation("[KimiService] ACP 服务已断开");
             }
         }
         finally
         {
-            _processLock.Release();
+            _connectLock.Release();
         }
-    }
-
-    private async Task WaitForServiceReadyAsync(CancellationToken ct)
-    {
-        var maxRetries = 30;
-        for (int i = 0; i < maxRetries; i++)
-        {
-            try
-            {
-                var response = await _httpClient.GetAsync("/health", ct);
-                if (response.IsSuccessStatusCode) return;
-            }
-            catch
-            {
-                // 服务尚未就绪，继续等待
-            }
-
-            await Task.Delay(500, ct);
-        }
-        throw new TimeoutException("Kimi Web 服务在15秒内未能启动就绪");
-    }
-
-    private string FindKimiExecutable()
-    {
-        if (!string.IsNullOrEmpty(_options.KimiExecutablePath) && _options.KimiExecutablePath != "kimi")
-        {
-            if (File.Exists(_options.KimiExecutablePath))
-                return _options.KimiExecutablePath;
-        }
-
-        // 尝试常见路径
-        var candidates = new[]
-        {
-            "kimi",  // PATH 中
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "kimi"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Python", "Scripts", "kimi.exe"),
-            "/usr/local/bin/kimi",
-            "/usr/bin/kimi"
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (candidate == "kimi" || File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new FileNotFoundException("无法找到 kimi 可执行文件。请安装 kimi-cli 或在配置中指定路径。");
     }
 
     #endregion
@@ -175,22 +100,82 @@ public class KimiServiceClient : IKimiServiceClient
     {
         await EnsureServiceRunningAsync(ct);
 
-        var request = new KimiChatRequest
+        // ACP 协议下同一时间只能处理一个 prompt
+        await _chatLock.WaitAsync(ct);
+        try
         {
-            Message = message,
-            SessionId = sessionId,
-            WorkDir = workDir ?? _options.DefaultWorkDir,
-            Yolo = yolo
-        };
+            var client = _client!;
+            var effectiveWorkDir = workDir ?? _options.DefaultWorkDir ?? ".";
 
-        _logger.LogInformation("[KimiService] 发送聊天请求: {Message}", 
-            message.Length > 100 ? message[..100] + "..." : message);
+            // 创建或恢复会话
+            string activeSessionId;
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                var newSession = await client.CreateSessionAsync(effectiveWorkDir, ct);
+                activeSessionId = newSession.SessionId;
+                _logger.LogInformation("[KimiService] 创建新 ACP 会话: {SessionId}", activeSessionId);
+            }
+            else
+            {
+                try
+                {
+                    await client.ResumeSessionAsync(effectiveWorkDir, sessionId, ct);
+                    activeSessionId = sessionId;
+                    _logger.LogInformation("[KimiService] 恢复 ACP 会话: {SessionId}", sessionId);
+                }
+                catch (KimiAcpException ex)
+                {
+                    _logger.LogWarning("[KimiService] 恢复会话失败 ({Error}), 创建新会话", ex.Message);
+                    var newSession = await client.CreateSessionAsync(effectiveWorkDir, ct);
+                    activeSessionId = newSession.SessionId;
+                    _logger.LogInformation("[KimiService] 创建新 ACP 会话: {SessionId}", activeSessionId);
+                }
+            }
 
-        var response = await _httpClient.PostAsJsonAsync("/api/chat", request, ct);
-        await EnsureSuccessAsync(response, ct);
+            // 收集流式响应
+            var messageBuilder = new StringBuilder();
+            void HandleUpdate(object? sender, SessionUpdateEventArgs e)
+            {
+                if (e.SessionId != activeSessionId) return;
+                if (e.UpdateType == "agent_message_chunk" && e.Content != null)
+                {
+                    messageBuilder.Append(e.Content);
+                }
+            }
 
-        var result = await response.Content.ReadFromJsonAsync<KimiChatResponse>(cancellationToken: ct);
-        return result ?? throw new InvalidOperationException("Kimi 服务返回空响应");
+            client.OnSessionUpdate += HandleUpdate;
+            try
+            {
+                _logger.LogInformation("[KimiService] 发送 ACP 聊天请求: {Message}",
+                    message.Length > 100 ? message[..100] + "..." : message);
+
+                var result = await client.SendPromptAsync(activeSessionId, message, ct);
+
+                _logger.LogInformation("[KimiService] ACP 聊天完成, StopReason: {StopReason}", result.StopReason);
+
+                return new KimiChatResponse
+                {
+                    Response = messageBuilder.ToString(),
+                    SessionId = activeSessionId,
+                    Completed = result.StopReason == "end_turn" || result.StopReason == "stop"
+                };
+            }
+            finally
+            {
+                client.OnSessionUpdate -= HandleUpdate;
+            }
+        }
+        catch (KimiAcpException ex)
+        {
+            throw new KimiServiceException(
+                $"Kimi ACP 错误: {ex.Message}",
+                ex.ErrorCode,
+                ex.Message);
+        }
+        finally
+        {
+            _chatLock.Release();
+        }
     }
 
     /// <inheritdoc/>
@@ -214,12 +199,17 @@ public class KimiServiceClient : IKimiServiceClient
     {
         await EnsureServiceRunningAsync(ct);
 
-        var request = new { work_dir = workDir ?? _options.DefaultWorkDir };
-        var response = await _httpClient.PostAsJsonAsync("/api/sessions", request, ct);
-        await EnsureSuccessAsync(response, ct);
+        var effectiveWorkDir = workDir ?? _options.DefaultWorkDir ?? ".";
+        var result = await _client!.CreateSessionAsync(effectiveWorkDir, ct);
 
-        var result = await response.Content.ReadFromJsonAsync<KimiSessionInfo>(cancellationToken: ct);
-        return result ?? throw new InvalidOperationException("创建会话返回空响应");
+        return new KimiSessionInfo
+        {
+            Id = result.SessionId,
+            WorkDir = effectiveWorkDir,
+            CreatedAt = DateTime.UtcNow,
+            LastActivity = DateTime.UtcNow,
+            MessageCount = 0
+        };
     }
 
     /// <inheritdoc/>
@@ -227,50 +217,48 @@ public class KimiServiceClient : IKimiServiceClient
     {
         await EnsureServiceRunningAsync(ct);
 
-        var response = await _httpClient.GetAsync("/api/sessions", ct);
-        await EnsureSuccessAsync(response, ct);
-
-        var result = await response.Content.ReadFromJsonAsync<List<KimiSessionInfo>>(cancellationToken: ct);
-        return result ?? new List<KimiSessionInfo>();
+        var result = await _client!.ListSessionsAsync(null, ct);
+        return result.Sessions.Select(MapSessionInfo).ToList();
     }
 
     /// <inheritdoc/>
     public async Task<KimiSessionInfo?> GetSessionAsync(string sessionId, CancellationToken ct = default)
     {
-        await EnsureServiceRunningAsync(ct);
-
-        var response = await _httpClient.GetAsync($"/api/sessions/{sessionId}", ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
-
-        await EnsureSuccessAsync(response, ct);
-        return await response.Content.ReadFromJsonAsync<KimiSessionInfo>(cancellationToken: ct);
+        var sessions = await ListSessionsAsync(ct);
+        return sessions.FirstOrDefault(s =>
+            string.Equals(s.Id, sessionId, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <inheritdoc/>
     public async Task<bool> DeleteSessionAsync(string sessionId, CancellationToken ct = default)
     {
-        await EnsureServiceRunningAsync(ct);
-
-        var response = await _httpClient.DeleteAsync($"/api/sessions/{sessionId}", ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
-
-        await EnsureSuccessAsync(response, ct);
-        return true;
+        // ACP 协议不支持删除会话操作
+        _logger.LogWarning("[KimiService] ACP 协议不支持删除会话操作，sessionId: {SessionId}", sessionId);
+        await Task.CompletedTask;
+        return false;
     }
 
     #endregion
 
     #region 工具方法
 
-    private async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
+    /// <summary>
+    /// 将 ACP SessionInfo 映射为 KimiSessionInfo
+    /// </summary>
+    private static KimiSessionInfo MapSessionInfo(SessionInfo session)
     {
-        if (response.IsSuccessStatusCode) return;
+        var timestamp = DateTime.TryParse(session.UpdatedAt, out var dt)
+            ? dt
+            : DateTime.UtcNow;
 
-        var content = await response.Content.ReadAsStringAsync(ct);
-        throw new KimiServiceException(
-            $"Kimi 服务错误: {(int)response.StatusCode} {response.ReasonPhrase}",
-            (int)response.StatusCode,
-            content);
+        return new KimiSessionInfo
+        {
+            Id = session.SessionId,
+            WorkDir = session.Cwd,
+            CreatedAt = timestamp,
+            LastActivity = timestamp,
+            MessageCount = 0 // ACP 协议不提供消息计数
+        };
     }
 
     public void Dispose()
@@ -278,23 +266,11 @@ public class KimiServiceClient : IKimiServiceClient
         if (_isDisposed) return;
         _isDisposed = true;
 
-        _httpClient.Dispose();
-        _processLock.Dispose();
+        _connectLock.Dispose();
+        _chatLock.Dispose();
+        _client?.Dispose();
+        _client = null;
 
-        if (_kimiProcess?.HasExited == false)
-        {
-            try
-            {
-                _kimiProcess.Kill(entireProcessTree: true);
-                _kimiProcess.WaitForExit(TimeSpan.FromSeconds(5));
-            }
-            catch
-            {
-                // 忽略清理异常
-            }
-        }
-
-        _kimiProcess?.Dispose();
         GC.SuppressFinalize(this);
     }
 
