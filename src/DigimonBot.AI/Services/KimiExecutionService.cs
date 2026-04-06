@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace DigimonBot.AI.Services;
 
 /// <summary>
-/// Kimi 执行服务 - 通过 HTTP API 与 Kimi Web 服务交互
-/// 替代原有的 CLI Process 调用方式，遵循 KimiServiceClient.md 官方指南
+/// Kimi 执行服务 - 通过 ACP 协议与 Kimi 服务交互
+/// 替代原有的 HTTP API 方式，使用 KimiAcpClient 进行通信
 /// </summary>
 public class KimiExecutionService : IKimiExecutionService
 {
@@ -40,7 +40,7 @@ public class KimiExecutionService : IKimiExecutionService
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            // 通过 HTTP API 发送聊天请求
+            // 通过 ACP 协议发送聊天请求
             var chatResponse = await _serviceClient.ChatAsync(
                 message: message,
                 sessionId: sessionId,
@@ -107,15 +107,15 @@ public class KimiExecutionService : IKimiExecutionService
                 DurationMs = (int)stopwatch.ElapsedMilliseconds
             };
         }
-        catch (HttpRequestException ex)
+        catch (InvalidOperationException ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex, "[KimiExec] HTTP 请求失败 - Kimi Web 服务可能未运行");
+            _logger.LogError(ex, "[KimiExec] ACP 服务未连接或会话异常");
 
             return new ExecutionResult
             {
                 Success = false,
-                Error = $"无法连接到 Kimi Web 服务: {ex.Message}\n请确认 kimi web 服务已启动。",
+                Error = $"Kimi ACP 服务异常: {ex.Message}\n请确认 kimi CLI 已安装且 ACP 服务可用。",
                 ExitCode = -1,
                 DurationMs = (int)stopwatch.ElapsedMilliseconds
             };

@@ -28,11 +28,11 @@ public class KimiAcpSession : IDisposable
     public event EventHandler<string>? OnMessageReceived;
     public event EventHandler? OnPromptCompleted;
 
-    public KimiAcpSession(string workDir, ILogger<KimiAcpSession>? logger = null)
+    public KimiAcpSession(string workDir, ILogger<KimiAcpSession>? logger = null, string? kimiExecutablePath = null)
     {
         _workDir = workDir;
         _logger = logger;
-        _client = new KimiAcpClient(logger);
+        _client = new KimiAcpClient(kimiExecutablePath: kimiExecutablePath);
         _client.OnSessionUpdate += HandleSessionUpdate;
         _client.OnError += (s, e) => _logger?.LogError("[KimiAcpSession] {Error}", e);
         _client.OnDisconnected += (s, e) => _logger?.LogWarning("[KimiAcpSession] ACP 连接断开");
