@@ -21,7 +21,7 @@ public class KimiAcpClient : IDisposable
     private StreamWriter? _stdin;
     private StreamReader? _stdout;
     private StreamReader? _stderr;
-    private readonly ILogger<KimiAcpClient>? _logger;
+    private readonly ILogger? _logger;
     private readonly string _kimiExecutablePath;
     private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
     private readonly CancellationTokenSource _cts = new();
@@ -42,7 +42,7 @@ public class KimiAcpClient : IDisposable
     /// </summary>
     public bool AutoApproveTools { get; set; } = true;
 
-    public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
+    public KimiAcpClient(ILogger? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
     {
         _logger = logger;
         _kimiExecutablePath = ResolveKimiExecutablePath(kimiExecutablePath);
