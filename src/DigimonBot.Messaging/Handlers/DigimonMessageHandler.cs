@@ -25,6 +25,9 @@ public class DigimonMessageHandler : IMessageHandler
     private readonly IGroupModeConfig _groupModeConfig;
     private readonly ITavernService _tavernService;
     private readonly IGroupChatMonitorService _groupChatMonitor;
+    private readonly ICustomCommandRepository? _customCommandRepo;
+    private readonly ICustomCommandExecutor? _customCommandExecutor;
+    private readonly List<string> _whitelist;
 
     public DigimonMessageHandler(
         CommandRegistry commandRegistry,
@@ -38,7 +41,10 @@ public class DigimonMessageHandler : IMessageHandler
         ILogger<DigimonMessageHandler> logger,
         IGroupModeConfig groupModeConfig,
         ITavernService tavernService,
-        IGroupChatMonitorService groupChatMonitor)
+        IGroupChatMonitorService groupChatMonitor,
+        ICustomCommandRepository? customCommandRepo = null,
+        ICustomCommandExecutor? customCommandExecutor = null,
+        List<string>? whitelist = null)
     {
         _commandRegistry = commandRegistry;
         _digimonManager = digimonManager;
@@ -52,6 +58,9 @@ public class DigimonMessageHandler : IMessageHandler
         _groupModeConfig = groupModeConfig;
         _tavernService = tavernService;
         _groupChatMonitor = groupChatMonitor;
+        _customCommandRepo = customCommandRepo;
+        _customCommandExecutor = customCommandExecutor;
+        _whitelist = whitelist ?? new List<string>();
     }
     
     /// <summary>
@@ -153,6 +162,14 @@ public class DigimonMessageHandler : IMessageHandler
 
         if (!_commandRegistry.TryGetCommand(commandName, out var command) || command == null)
         {
+            // 尝试查找自定义命令
+            if (_customCommandRepo != null && _customCommandExecutor != null)
+            {
+                var customResult = await TryExecuteCustomCommandAsync(commandName, args, context);
+                if (customResult != null)
+                    return customResult;
+            }
+
             return new MessageResult 
             { 
                 Handled = true, 
@@ -206,6 +223,104 @@ public class DigimonMessageHandler : IMessageHandler
             Response = result.Message,
             IsCommand = true
         };
+    }
+
+    /// <summary>
+    /// 尝试执行自定义命令（内部命令未找到时的回退）
+    /// </summary>
+    private async Task<MessageResult?> TryExecuteCustomCommandAsync(string commandName, string[] args, MessageContext context)
+    {
+        try
+        {
+            // 按名称查找
+            var customCmd = await _customCommandRepo!.GetByNameAsync(commandName);
+
+            // 按别名查找
+            if (customCmd == null)
+            {
+                customCmd = await _customCommandRepo.GetByAliasAsync(commandName);
+            }
+
+            if (customCmd == null)
+                return null;
+
+            // 白名单检查
+            if (customCmd.RequiresWhitelist && !_whitelist.Contains(context.UserId))
+            {
+                return new MessageResult
+                {
+                    Handled = true,
+                    Response = "❌ 此命令需要白名单权限",
+                    IsCommand = true
+                };
+            }
+
+            // 执行命令
+            var result = await _customCommandExecutor!.ExecuteAsync(customCmd, args, context.UserId);
+
+            // 更新使用统计
+            await _customCommandRepo.UpdateUsageAsync(customCmd.Id);
+
+            // 格式化结果
+            var response = FormatCustomCommandResult(result, customCmd);
+
+            return new MessageResult
+            {
+                Handled = true,
+                Response = response,
+                IsCommand = true
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[CustomCmd] 执行自定义命令失败: {Name}", commandName);
+            return new MessageResult
+            {
+                Handled = true,
+                Response = $"❌ 命令执行失败: {ex.Message}",
+                IsCommand = true
+            };
+        }
+    }
+
+    /// <summary>
+    /// 格式化自定义命令执行结果
+    /// </summary>
+    private static string FormatCustomCommandResult(CustomCommandResult result, Core.Models.CustomCommand cmd)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"🚀 **{cmd.Name}** 执行结果");
+        sb.AppendLine();
+
+        if (result.Success)
+        {
+            if (!string.IsNullOrEmpty(result.Output))
+            {
+                var output = result.Output.Length > 2000
+                    ? result.Output[..1900] + $"\n\n... (输出已截断)"
+                    : result.Output;
+                sb.AppendLine(output);
+            }
+            else
+            {
+                sb.AppendLine("✅ 执行成功（无输出）");
+            }
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                sb.AppendLine($"❌ 错误: {result.Error}");
+            }
+            if (!string.IsNullOrEmpty(result.Output))
+            {
+                sb.AppendLine(result.Output);
+            }
+        }
+
+        sb.AppendLine($"⏱️ 耗时: {result.DurationMs}ms");
+
+        return sb.ToString();
     }
 
     private async Task<MessageResult> HandleAiConversationAsync(MessageContext context)

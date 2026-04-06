@@ -14,6 +14,7 @@ public class KimiCommand : ICommand
     private readonly IKimiRepositoryManager _repoManager;
     private readonly IKimiExecutionService _executionService;
     private readonly IKimiRepositoryRepository _repoRepository;
+    private readonly IKimiServiceClient _serviceClient;
     private readonly IKimiAgentMonitor _agentMonitor;
     private readonly IGitCommitService _gitCommitService;
     private readonly IGitHttpServer? _gitHttpServer;
@@ -22,10 +23,16 @@ public class KimiCommand : ICommand
     // 配置参数（由DI注入，从KimiConfigService获取）
     private readonly Func<KimiCommandConfig> _getConfig;
 
+    /// <summary>
+    /// 当前活跃会话ID（由 kimi service 管理，.NET 端仅跟踪当前选择的会话）
+    /// </summary>
+    private string? _currentSessionId;
+
     public KimiCommand(
         IKimiRepositoryManager repoManager,
         IKimiExecutionService executionService,
         IKimiRepositoryRepository repoRepository,
+        IKimiServiceClient serviceClient,
         Func<KimiCommandConfig> getConfig,
         IKimiAgentMonitor agentMonitor,
         IGitCommitService gitCommitService,
@@ -35,6 +42,7 @@ public class KimiCommand : ICommand
         _repoManager = repoManager;
         _executionService = executionService;
         _repoRepository = repoRepository;
+        _serviceClient = serviceClient;
         _getConfig = getConfig;
         _agentMonitor = agentMonitor;
         _gitCommitService = gitCommitService;
@@ -80,6 +88,8 @@ public class KimiCommand : ICommand
                 "--list-repos" => await HandleListRepos(),
                 "--switch-repo" => await HandleSwitchRepo(args),
                 "--current-repo" => await HandleCurrentRepo(),
+                "--list-sessions" => await HandleListSessions(),
+                "--switch-session" => await HandleSwitchSession(args),
                 _ => await HandleKimiExecution(args, context, config)
             };
         }
@@ -217,6 +227,11 @@ public class KimiCommand : ICommand
         try
         {
             var repo = await _repoManager.CreateRepositoryAsync(repoName, context.OriginalUserId);
+
+            // 切换仓库时重置会话状态 - 会话由 kimi service 管理
+            _currentSessionId = null;
+            _logger.LogInformation("[KimiCommand] 创建新仓库 '{Name}'，已重置会话状态", repo.Name);
+
             return new CommandResult
             {
                 Success = true,
@@ -225,6 +240,7 @@ public class KimiCommand : ICommand
                     📦 名称: {repo.Name}
                     📁 路径: {repo.Path}
                     🔄 已设为当前活动仓库
+                    💬 会话已重置
                     """
             };
         }
@@ -289,8 +305,15 @@ public class KimiCommand : ICommand
         var name = args[1];
         var success = await _repoManager.SwitchRepositoryAsync(name);
 
+        if (success)
+        {
+            // 切换仓库时重置会话状态 - 会话由 kimi service 管理
+            _currentSessionId = null;
+            _logger.LogInformation("[KimiCommand] 切换到仓库 '{Name}'，已重置会话状态", name);
+        }
+
         return success
-            ? new CommandResult { Success = true, Message = $"✅ 已切换到仓库: {name}" }
+            ? new CommandResult { Success = true, Message = $"✅ 已切换到仓库: {name}\n💬 会话已重置，新的对话将创建新会话" }
             : new CommandResult { Success = false, Message = $"❌ 仓库 '{name}' 不存在。使用 `/kimi --list-repos` 查看可用仓库。" };
     }
 
@@ -310,6 +333,10 @@ public class KimiCommand : ICommand
             };
         }
 
+        var sessionInfo = _currentSessionId != null
+            ? $"\n当前会话: {TruncateSessionId(_currentSessionId)}"
+            : "\n当前会话: 无（将自动创建）";
+
         return new CommandResult
         {
             Success = true,
@@ -318,9 +345,162 @@ public class KimiCommand : ICommand
                 名称: {repo.Name}
                 路径: {repo.Path}
                 创建时间: {repo.CreatedAt:yyyy-MM-dd HH:mm}
-                会话数: {repo.SessionCount}
+                会话数: {repo.SessionCount}{sessionInfo}
                 """
         };
+    }
+
+    /// <summary>
+    /// 列出当前仓库的所有会话（从 kimi service 获取）
+    /// </summary>
+    private async Task<CommandResult> HandleListSessions()
+    {
+        try
+        {
+            var repo = await _repoManager.GetActiveRepositoryAsync();
+            if (repo == null)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = "📦 当前没有活动仓库。请先使用 `/kimi --new-repo [名称]` 创建一个。"
+                };
+            }
+
+            var allSessions = await _serviceClient.ListSessionsAsync();
+
+            // 筛选属于当前仓库工作目录的会话
+            var repoSessions = allSessions
+                .Where(s => string.Equals(
+                    Path.GetFullPath(s.WorkDir),
+                    Path.GetFullPath(repo.Path),
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(s => s.LastActivity)
+                .ToList();
+
+            if (repoSessions.Count == 0)
+            {
+                return new CommandResult
+                {
+                    Success = true,
+                    Message = $"💬 仓库 **{repo.Name}** 暂无活跃会话。发送消息将自动创建新会话。"
+                };
+            }
+
+            var lines = new List<string> { $"💬 **仓库 {repo.Name} 的会话列表** (共 {repoSessions.Count} 个):\n" };
+
+            foreach (var session in repoSessions)
+            {
+                var shortId = session.Id.Length > 8 ? session.Id[..8] : session.Id;
+                var isCurrent = session.Id == _currentSessionId ? " ✅ [当前]" : "";
+                var lastActivity = session.LastActivity.ToString("yyyy-MM-dd HH:mm");
+                lines.Add($"  • {shortId}...{isCurrent} - 消息数: {session.MessageCount}, 最后活动: {lastActivity}");
+            }
+
+            lines.Add($"\n使用 `/kimi --switch-session <会话ID前缀>` 切换会话");
+
+            return new CommandResult
+            {
+                Success = true,
+                Message = string.Join("\n", lines)
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[KimiCommand] 列出会话失败");
+            return new CommandResult
+            {
+                Success = false,
+                Message = $"❌ 获取会话列表失败: {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// 切换到指定会话
+    /// </summary>
+    private async Task<CommandResult> HandleSwitchSession(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            return new CommandResult
+            {
+                Success = false,
+                Message = "❌ 请指定会话ID: `/kimi --switch-session <会话ID或前缀>`"
+            };
+        }
+
+        var sessionIdPrefix = args[1];
+
+        try
+        {
+            // 先尝试精确匹配
+            var session = await _serviceClient.GetSessionAsync(sessionIdPrefix);
+            if (session != null)
+            {
+                _currentSessionId = session.Id;
+                var shortId = session.Id.Length > 8 ? session.Id[..8] : session.Id;
+                return new CommandResult
+                {
+                    Success = true,
+                    Message = $"✅ 已切换到会话: {shortId}... (消息数: {session.MessageCount})"
+                };
+            }
+
+            // 尝试前缀匹配
+            var allSessions = await _serviceClient.ListSessionsAsync();
+            var repo = await _repoManager.GetActiveRepositoryAsync();
+
+            var matches = allSessions
+                .Where(s => s.Id.StartsWith(sessionIdPrefix, StringComparison.OrdinalIgnoreCase))
+                .Where(s => repo == null || string.Equals(
+                    Path.GetFullPath(s.WorkDir),
+                    Path.GetFullPath(repo.Path),
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 0)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"❌ 未找到匹配的会话: '{sessionIdPrefix}'。使用 `/kimi --list-sessions` 查看可用会话。"
+                };
+            }
+
+            if (matches.Count > 1)
+            {
+                var matchList = string.Join("\n", matches.Select(s =>
+                {
+                    var shortId = s.Id.Length > 8 ? s.Id[..8] : s.Id;
+                    return $"  • {shortId}...";
+                }));
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"⚠️ 前缀 '{sessionIdPrefix}' 匹配到多个会话，请提供更长的前缀:\n{matchList}"
+                };
+            }
+
+            var matched = matches[0];
+            _currentSessionId = matched.Id;
+            var matchedShortId = matched.Id.Length > 8 ? matched.Id[..8] : matched.Id;
+
+            return new CommandResult
+            {
+                Success = true,
+                Message = $"✅ 已切换到会话: {matchedShortId}... (消息数: {matched.MessageCount})"
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[KimiCommand] 切换会话失败");
+            return new CommandResult
+            {
+                Success = false,
+                Message = $"❌ 切换会话失败: {ex.Message}"
+            };
+        }
     }
 
     /// <summary>
@@ -361,8 +541,14 @@ public class KimiCommand : ICommand
             await _repoRepository.UpdateLastUsedAsync(repo.Name);
             await _repoRepository.IncrementSessionCountAsync(repo.Name);
 
-            // 通过 HTTP API 执行 Kimi 聊天
-            var result = await _executionService.ExecuteAsync(repo.Path, chatMessage, config.DefaultTimeoutSeconds, cancellationToken);
+            // 通过 HTTP API 执行 Kimi 聊天（传递当前会话ID以维持上下文）
+            var result = await _executionService.ExecuteAsync(repo.Path, chatMessage, _currentSessionId, config.DefaultTimeoutSeconds, cancellationToken);
+
+            // 跟踪返回的会话ID，后续消息将复用同一会话
+            if (result.SessionId != null)
+            {
+                _currentSessionId = result.SessionId;
+            }
 
             // 自动提交 Git（如果启用且执行成功）
             if (result.Success && config.AutoCommit)
@@ -470,6 +656,14 @@ public class KimiCommand : ICommand
     }
 
     /// <summary>
+    /// 截断会话ID用于显示
+    /// </summary>
+    private static string TruncateSessionId(string sessionId)
+    {
+        return sessionId.Length > 8 ? sessionId[..8] + "..." : sessionId;
+    }
+
+    /// <summary>
     /// 获取帮助信息
     /// </summary>
     private static CommandResult GetHelpResult()
@@ -488,21 +682,28 @@ public class KimiCommand : ICommand
                   --interrupt           同上（--cancel的别名）
 
                 仓库管理:
-                  --new-repo [名称]     创建新仓库
+                  --new-repo [名称]     创建新仓库（重置会话）
                   --list-repos          列出所有仓库
-                  --switch-repo <名称>  切换到指定仓库
-                  --current-repo        显示当前仓库
+                  --switch-repo <名称>  切换到指定仓库（重置会话）
+                  --current-repo        显示当前仓库和会话信息
+
+                会话管理:
+                  --list-sessions       列出当前仓库的所有会话
+                  --switch-session <ID> 切换到指定会话（支持ID前缀匹配）
 
                 聊天模式:
                   直接输入消息即可与 Kimi 对话
                   Kimi 将自动在当前仓库中执行代码操作
                   执行完成后会自动提交 Git 并返回克隆链接
+                  同一仓库下会话会自动复用，保持上下文连贯
 
                 示例:
                   /kimi --new-repo my-project
                   /kimi --switch-repo my-project
                   /kimi 用Python写个Hello World
                   /kimi 分析这个项目的代码结构
+                  /kimi --list-sessions
+                  /kimi --switch-session abc123
                   /kimi --status
                   /kimi --cancel
                 """

@@ -1,4 +1,5 @@
 using DigimonBot.AI.Services;
+using DigimonBot.Core.Events;
 using DigimonBot.Core.Services;
 using DigimonBot.Data.Database;
 using DigimonBot.Data.Repositories;
@@ -325,6 +326,7 @@ public class Program
                         provider.GetRequiredService<IKimiRepositoryManager>(),
                         provider.GetRequiredService<IKimiExecutionService>(),
                         provider.GetRequiredService<IKimiRepositoryRepository>(),
+                        provider.GetRequiredService<IKimiServiceClient>(),
                         () =>
                         {
                             var currentCfg = kimiConfigSvc.CurrentConfig;
@@ -342,6 +344,10 @@ public class Program
                         provider.GetService<IGitHttpServer>(),
                         provider.GetRequiredService<ILogger<KimiCommand>>()));
 
+                    // 注册自定义命令列表命令
+                    registry.Register(new ListCustomCommandsCommand(
+                        provider.GetRequiredService<ICustomCommandRepository>()));
+
                     return registry;
                 });
 
@@ -354,6 +360,16 @@ public class Program
                 services.AddSingleton(kimiDbInitializer);
 
                 services.AddSingleton<IKimiRepositoryRepository, KimiRepositoryRepository>();
+
+                // 注册自定义命令服务
+                services.AddSingleton<ICustomCommandRepository, DigimonBot.Data.Repositories.Sqlite.CustomCommandRepository>();
+                services.AddSingleton<ICustomCommandExecutor>(provider =>
+                {
+                    var kimiConfig = provider.GetRequiredService<KimiConfigService>();
+                    return new DigimonBot.Data.Services.CustomCommandExecutor(
+                        kimiConfig.CurrentConfig.Execution.BasePath,
+                        provider.GetRequiredService<ILogger<DigimonBot.Data.Services.CustomCommandExecutor>>());
+                });
 
                 services.AddSingleton<IKimiRepositoryManager>(provider =>
                 {
@@ -410,8 +426,31 @@ public class Program
                 services.AddHostedService(provider =>
                     (GitHttpServer)provider.GetRequiredService<IGitHttpServer>());
 
-                // 注册消息处理器
-                services.AddSingleton<IMessageHandler, DigimonMessageHandler>();
+                // 注册消息处理器（传递自定义命令依赖）
+                services.AddSingleton<IMessageHandler>(provider =>
+                {
+                    var kimiConfig = provider.GetService<KimiConfigService>();
+                    var whitelist = kimiConfig != null
+                        ? new List<string>(kimiConfig.CurrentConfig.AccessControl.Whitelist)
+                        : new List<string>();
+
+                    return new DigimonMessageHandler(
+                        provider.GetRequiredService<CommandRegistry>(),
+                        provider.GetRequiredService<IDigimonManager>(),
+                        provider.GetRequiredService<IDigimonRepository>(),
+                        provider.GetRequiredService<IAIClient>(),
+                        provider.GetRequiredService<IPersonalityEngine>(),
+                        provider.GetRequiredService<IEvolutionEngine>(),
+                        provider.GetRequiredService<IEmotionTracker>(),
+                        provider.GetRequiredService<IEventPublisher>(),
+                        provider.GetRequiredService<ILogger<DigimonMessageHandler>>(),
+                        provider.GetRequiredService<IGroupModeConfig>(),
+                        provider.GetRequiredService<ITavernService>(),
+                        provider.GetRequiredService<IGroupChatMonitorService>(),
+                        provider.GetService<ICustomCommandRepository>(),
+                        provider.GetService<ICustomCommandExecutor>(),
+                        whitelist);
+                });
 
                 // 注册Bot服务
                 services.AddHostedService<BotService>();

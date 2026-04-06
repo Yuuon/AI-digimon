@@ -46,6 +46,7 @@ public class KimiDatabaseInitializer
         // 创建表
         CreateKimiRepositoriesTable(connection);
         CreateKimiSessionsTable(connection);
+        CreateCustomCommandsTable(connection);
     }
 
     /// <summary>
@@ -100,6 +101,33 @@ public class KimiDatabaseInitializer
             CREATE INDEX IF NOT EXISTS idx_kimi_sessions_repoid ON KimiSessions(RepoId);
             CREATE INDEX IF NOT EXISTS idx_kimi_sessions_userid ON KimiSessions(UserId);
             CREATE INDEX IF NOT EXISTS idx_kimi_sessions_executedat ON KimiSessions(ExecutedAt);
+        ";
+
+        using var command = new SqliteCommand(sql, connection);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 创建自定义命令表
+    /// </summary>
+    private void CreateCustomCommandsTable(SqliteConnection connection)
+    {
+        const string sql = @"
+            CREATE TABLE IF NOT EXISTS CustomCommands (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Name TEXT NOT NULL UNIQUE,
+                Aliases TEXT,
+                BinaryPath TEXT NOT NULL,
+                OwnerUserId TEXT NOT NULL,
+                RequiresWhitelist INTEGER DEFAULT 0,
+                Description TEXT,
+                CreatedAt TEXT NOT NULL,
+                LastUsedAt TEXT,
+                UseCount INTEGER DEFAULT 0
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_custom_commands_name ON CustomCommands(Name);
+            CREATE INDEX IF NOT EXISTS idx_custom_commands_aliases ON CustomCommands(Aliases);
         ";
 
         using var command = new SqliteCommand(sql, connection);

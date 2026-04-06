@@ -223,6 +223,18 @@ public class KimiServiceClient : IKimiServiceClient
     }
 
     /// <inheritdoc/>
+    public async Task<List<KimiSessionInfo>> ListSessionsAsync(CancellationToken ct = default)
+    {
+        await EnsureServiceRunningAsync(ct);
+
+        var response = await _httpClient.GetAsync("/api/sessions", ct);
+        await EnsureSuccessAsync(response, ct);
+
+        var result = await response.Content.ReadFromJsonAsync<List<KimiSessionInfo>>(cancellationToken: ct);
+        return result ?? new List<KimiSessionInfo>();
+    }
+
+    /// <inheritdoc/>
     public async Task<KimiSessionInfo?> GetSessionAsync(string sessionId, CancellationToken ct = default)
     {
         await EnsureServiceRunningAsync(ct);
