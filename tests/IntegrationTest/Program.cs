@@ -2,11 +2,37 @@ using DigimonBot.AI.Services;
 using DigimonBot.Core.Models;
 using DigimonBot.Core.Services;
 using DigimonBot.Data.Repositories;
+using IntegrationTest;
 using Microsoft.Extensions.Logging;
 
 Console.WriteLine("========================================");
 Console.WriteLine("    数码宝贝Bot - 集成测试控制台");
 Console.WriteLine("========================================\n");
+
+// 检查命令行参数
+if (args.Length > 0 && args[0] == "--acp")
+{
+    // 运行 ACP 测试
+    return await KimiAcpTest.RunAsync();
+}
+
+Console.WriteLine("可用测试:");
+Console.WriteLine("  1. 默认测试 (核心功能)");
+Console.WriteLine("  2. ACP 客户端测试 (kimi acp)");
+Console.WriteLine();
+Console.WriteLine("使用方法:");
+Console.WriteLine("  dotnet run                    # 运行默认测试");
+Console.WriteLine("  dotnet run -- --acp          # 运行 ACP 测试");
+Console.WriteLine();
+Console.WriteLine("按 Enter 继续默认测试，或输入 'acp' 运行 ACP 测试...");
+var input = Console.ReadLine();
+
+if (input?.Trim().ToLower() == "acp")
+{
+    return await KimiAcpTest.RunAsync();
+}
+
+Console.WriteLine();
 
 // 初始化
 var loggerFactory = LoggerFactory.Create(builder =>
