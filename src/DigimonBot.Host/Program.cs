@@ -336,6 +336,7 @@ public class Program
                                 DefaultTimeoutSeconds = currentCfg.Execution.DefaultTimeoutSeconds
                             };
                         },
+                        provider.GetRequiredService<IKimiAgentMonitor>(),
                         provider.GetRequiredService<ILogger<KimiCommand>>()));
 
                     return registry;
@@ -343,6 +344,7 @@ public class Program
 
                 // 注册 Kimi Agent 服务
                 services.AddSingleton<KimiConfigService>();
+                services.AddSingleton<IKimiAgentMonitor, KimiAgentMonitor>();
 
                 var kimiDbInitializer = new KimiDatabaseInitializer("Data Source=Data/kimi_data.db");
                 kimiDbInitializer.Initialize();

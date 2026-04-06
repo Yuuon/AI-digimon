@@ -13,6 +13,7 @@ public class KimiCommand : ICommand
     private readonly IKimiRepositoryManager _repoManager;
     private readonly IKimiExecutionService _executionService;
     private readonly IKimiRepositoryRepository _repoRepository;
+    private readonly IKimiAgentMonitor _agentMonitor;
     private readonly ILogger<KimiCommand> _logger;
 
     // 配置参数（由DI注入，从KimiConfigService获取）
@@ -23,12 +24,14 @@ public class KimiCommand : ICommand
         IKimiExecutionService executionService,
         IKimiRepositoryRepository repoRepository,
         Func<KimiCommandConfig> getConfig,
+        IKimiAgentMonitor agentMonitor,
         ILogger<KimiCommand> logger)
     {
         _repoManager = repoManager;
         _executionService = executionService;
         _repoRepository = repoRepository;
         _getConfig = getConfig;
+        _agentMonitor = agentMonitor;
         _logger = logger;
     }
 
@@ -60,9 +63,12 @@ public class KimiCommand : ICommand
 
             var firstArg = args[0].ToLowerInvariant();
 
+            // --status 和 --cancel 无需等待，直接处理（绕过忙碌检查）
             return firstArg switch
             {
                 "--help" or "-h" => GetHelpResult(),
+                "--status" => HandleStatus(),
+                "--cancel" or "--interrupt" => HandleCancel(),
                 "--new-repo" => await HandleNewRepo(args, context),
                 "--list-repos" => await HandleListRepos(),
                 "--switch-repo" => await HandleSwitchRepo(args),
@@ -128,6 +134,70 @@ public class KimiCommand : ICommand
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 显示当前Agent状态
+    /// </summary>
+    private CommandResult HandleStatus()
+    {
+        if (!_agentMonitor.IsBusy)
+        {
+            return new CommandResult
+            {
+                Success = true,
+                Message = "✅ **Kimi Agent 状态**: 空闲，可接受新任务。"
+            };
+        }
+
+        var task = _agentMonitor.CurrentTask;
+        if (task == null)
+        {
+            return new CommandResult
+            {
+                Success = true,
+                Message = "⏳ **Kimi Agent 状态**: 忙碌中。"
+            };
+        }
+
+        var elapsed = task.Elapsed;
+        var elapsedStr = elapsed.TotalMinutes >= 1
+            ? $"{(int)elapsed.TotalMinutes}分{elapsed.Seconds}秒"
+            : $"{elapsed.Seconds}秒";
+
+        return new CommandResult
+        {
+            Success = true,
+            Message = $"""
+                ⏳ **Kimi Agent 状态**: 忙碌中
+
+                发起用户: {task.UserId}
+                任务内容: {task.Command}
+                已运行: {elapsedStr}
+
+                使用 `/kimi --cancel` 可中断当前任务。
+                """
+        };
+    }
+
+    /// <summary>
+    /// 取消当前正在运行的任务
+    /// </summary>
+    private CommandResult HandleCancel()
+    {
+        if (!_agentMonitor.IsBusy)
+        {
+            return new CommandResult
+            {
+                Success = false,
+                Message = "ℹ️ 当前没有正在运行的Kimi任务。"
+            };
+        }
+
+        var cancelled = _agentMonitor.TryCancel();
+        return cancelled
+            ? new CommandResult { Success = true, Message = "🛑 已发送中断信号，任务正在停止..." }
+            : new CommandResult { Success = false, Message = "⚠️ 无法中断任务（任务可能已结束）。" };
     }
 
     /// <summary>
@@ -247,7 +317,7 @@ public class KimiCommand : ICommand
     }
 
     /// <summary>
-    /// 处理Kimi CLI执行
+    /// 处理Kimi CLI执行（带忙碌保护）
     /// </summary>
     private async Task<CommandResult> HandleKimiExecution(string[] args, CommandContext context, KimiCommandConfig config)
     {
@@ -261,21 +331,40 @@ public class KimiCommand : ICommand
             };
         }
 
-        // 确保有可用仓库
-        var repo = await _repoManager.EnsureRepositoryExistsAsync(context.OriginalUserId);
+        // 检查Agent是否空闲，若忙碌则拒绝
+        if (!_agentMonitor.TryBeginTask(context.OriginalUserId, string.Join(" ", args), out var cancellationToken))
+        {
+            var task = _agentMonitor.CurrentTask;
+            var busyMsg = task != null
+                ? $"⏳ **Kimi Agent 正忙** - 任务执行中（已运行 {FormatElapsed(task.Elapsed)}）。\n使用 `/kimi --status` 查看详情，`/kimi --cancel` 中断任务。"
+                : "⏳ **Kimi Agent 正忙** - 请稍候再试。";
 
-        // 构建Kimi CLI参数
-        var kimiArgs = string.Join(" ", args);
+            return new CommandResult { Success = false, Message = busyMsg };
+        }
 
-        // 更新仓库使用信息
-        await _repoRepository.UpdateLastUsedAsync(repo.Name);
-        await _repoRepository.IncrementSessionCountAsync(repo.Name);
+        try
+        {
+            // 确保有可用仓库
+            var repo = await _repoManager.EnsureRepositoryExistsAsync(context.OriginalUserId);
 
-        // 执行Kimi CLI
-        var result = await _executionService.ExecuteAsync(repo.Path, kimiArgs, config.DefaultTimeoutSeconds);
+            // 构建Kimi CLI参数
+            var kimiArgs = string.Join(" ", args);
 
-        // 格式化输出
-        return FormatExecutionResult(result, repo.Name);
+            // 更新仓库使用信息
+            await _repoRepository.UpdateLastUsedAsync(repo.Name);
+            await _repoRepository.IncrementSessionCountAsync(repo.Name);
+
+            // 执行Kimi CLI（传入取消令牌）
+            var result = await _executionService.ExecuteAsync(repo.Path, kimiArgs, config.DefaultTimeoutSeconds, cancellationToken);
+
+            // 格式化输出
+            return FormatExecutionResult(result, repo.Name);
+        }
+        finally
+        {
+            // 无论成功、失败还是取消，都必须释放状态
+            _agentMonitor.EndTask();
+        }
     }
 
     /// <summary>
@@ -322,6 +411,13 @@ public class KimiCommand : ICommand
         }
     }
 
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        return elapsed.TotalMinutes >= 1
+            ? $"{(int)elapsed.TotalMinutes}分{elapsed.Seconds}秒"
+            : $"{elapsed.Seconds}秒";
+    }
+
     /// <summary>
     /// 获取帮助信息
     /// </summary>
@@ -334,6 +430,11 @@ public class KimiCommand : ICommand
                 🤖 **Kimi 代码助手**
 
                 用法: /kimi [选项] [消息]
+
+                Agent管理:
+                  --status              查看当前Agent执行状态
+                  --cancel              中断当前正在运行的任务
+                  --interrupt           同上（--cancel的别名）
 
                 仓库管理:
                   --new-repo [名称]     创建新仓库
@@ -352,7 +453,8 @@ public class KimiCommand : ICommand
                   /kimi --new-repo my-project
                   /kimi --switch-repo my-project
                   /kimi 用Python写个Hello World
-                  /kimi --help
+                  /kimi --status
+                  /kimi --cancel
                 """
         };
     }

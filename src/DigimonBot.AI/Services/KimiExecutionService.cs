@@ -21,7 +21,7 @@ public class KimiExecutionService : IKimiExecutionService
         _kimiCliPath = kimiCliPath;
     }
 
-    public async Task<ExecutionResult> ExecuteAsync(string repoPath, string arguments, int timeoutSeconds)
+    public async Task<ExecutionResult> ExecuteAsync(string repoPath, string arguments, int timeoutSeconds, CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -55,27 +55,46 @@ public class KimiExecutionService : IKimiExecutionService
             }
 
             // 异步读取stdout/stderr避免死锁
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-            var timeoutMs = timeoutSeconds * 1000;
-            var completed = process.WaitForExit(timeoutMs);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            if (!completed)
+            bool timedOut = false;
+            bool cancelled = false;
+
+            try
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[KimiExec] 终止超时进程时出错");
-                }
+                await process.WaitForExitAsync(linkedCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = !timeoutCts.IsCancellationRequested; // true = external cancel, false = timeout
+                timedOut = timeoutCts.IsCancellationRequested;
 
-                stopwatch.Stop();
+                try { process.Kill(entireProcessTree: true); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[KimiExec] 终止进程时出错"); }
+            }
 
+            stopwatch.Stop();
+
+            if (cancelled)
+            {
+                _logger.LogInformation("[KimiExec] 任务已被用户取消: {Args}", arguments);
+                return new ExecutionResult
+                {
+                    Success = false,
+                    Output = await GetPartialOutput(outputTask),
+                    Error = "任务已被用户中断。",
+                    ExitCode = -1,
+                    DurationMs = (int)stopwatch.ElapsedMilliseconds
+                };
+            }
+
+            if (timedOut)
+            {
                 _logger.LogWarning("[KimiExec] 执行超时 ({Timeout}s): {Args}", timeoutSeconds, arguments);
-
                 return new ExecutionResult
                 {
                     Success = false,
@@ -88,8 +107,6 @@ public class KimiExecutionService : IKimiExecutionService
 
             var output = await outputTask;
             var error = await errorTask;
-
-            stopwatch.Stop();
 
             var result = new ExecutionResult
             {
@@ -105,7 +122,7 @@ public class KimiExecutionService : IKimiExecutionService
 
             return result;
         }
-        catch (Exception ex) when (ex is not TimeoutException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             stopwatch.Stop();
 
