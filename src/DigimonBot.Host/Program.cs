@@ -402,20 +402,13 @@ public class Program
                         provider.GetRequiredService<ILogger<GitHttpServer>>(),
                         kimiConfig.CurrentConfig.Execution.BasePath,
                         kimiConfig.CurrentConfig.Git.HttpPort,
-                        kimiConfig.CurrentConfig.Git.PublicGitUrl);
+                        kimiConfig.CurrentConfig.Git.PublicGitUrl,
+                        kimiConfig.CurrentConfig.Git.EnableHttpServer);
                 });
 
-                // 如果配置启用 Git HTTP 服务器，注册为托管服务
-                {
-                    var kimiConfigTemp = new KimiConfigService(
-                        Microsoft.Extensions.Logging.Abstractions.NullLogger<KimiConfigService>.Instance);
-                    if (kimiConfigTemp.CurrentConfig.Git.EnableHttpServer)
-                    {
-                        services.AddHostedService(provider =>
-                            (GitHttpServer)provider.GetRequiredService<IGitHttpServer>());
-                    }
-                    kimiConfigTemp.Dispose();
-                }
+                // Git HTTP 服务器注册为托管服务（EnableHttpServer 在运行时检查）
+                services.AddHostedService(provider =>
+                    (GitHttpServer)provider.GetRequiredService<IGitHttpServer>());
 
                 // 注册消息处理器
                 services.AddSingleton<IMessageHandler, DigimonMessageHandler>();

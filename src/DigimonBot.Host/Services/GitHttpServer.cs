@@ -19,6 +19,7 @@ public class GitHttpServer : IGitHttpServer, IHostedService
     private readonly string _basePath;
     private readonly int _port;
     private readonly string _publicUrl;
+    private readonly bool _enabled;
     private IWebHost? _webHost;
 
     public bool IsRunning => _webHost != null;
@@ -27,17 +28,25 @@ public class GitHttpServer : IGitHttpServer, IHostedService
         ILogger<GitHttpServer> logger,
         string basePath,
         int port,
-        string publicUrl)
+        string publicUrl,
+        bool enabled = true)
     {
         _logger = logger;
         _basePath = Path.GetFullPath(basePath);
         _port = port;
         _publicUrl = publicUrl.TrimEnd('/');
+        _enabled = enabled;
     }
 
     /// <inheritdoc/>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        if (!_enabled)
+        {
+            _logger.LogInformation("[GitHttpServer] Git HTTP 服务器已禁用，跳过启动");
+            return;
+        }
+
         try
         {
             // 确保基础目录存在
@@ -151,5 +160,11 @@ public class GitHttpServer : IGitHttpServer, IHostedService
         if (process == null) return;
 
         await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            var error = await process.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException($"Git 命令失败 (exit code {process.ExitCode}): {error}");
+        }
     }
 }

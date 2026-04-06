@@ -94,8 +94,12 @@ public class GitCommitService : IGitCommitService
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
 
-        var completed = process.WaitForExit(30000); // 30秒超时
-        if (!completed)
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
         {
             process.Kill();
             throw new TimeoutException($"Git 命令超时: git {string.Join(" ", arguments)}");
