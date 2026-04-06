@@ -11,7 +11,7 @@ namespace DigimonBot.AI.Services;
 public class KimiAcpSession : IDisposable
 {
     private readonly KimiAcpClient _client;
-    private readonly ILogger<KimiAcpSession>? _logger;
+    private readonly ILogger? _logger;
     private readonly string _workDir;
     private string? _sessionId;
     private readonly StringBuilder _thoughtBuilder = new();
@@ -28,7 +28,7 @@ public class KimiAcpSession : IDisposable
     public event EventHandler<string>? OnMessageReceived;
     public event EventHandler? OnPromptCompleted;
 
-    public KimiAcpSession(string workDir, ILogger<KimiAcpSession>? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
+    public KimiAcpSession(string workDir, ILogger? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
     {
         _workDir = workDir;
         _logger = logger;
