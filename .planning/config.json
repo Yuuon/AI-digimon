@@ -1,0 +1,42 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "DigimonBot - Kimi Agent Coding Integration",
+    "type": "feature",
+    "created_at": "2026-04-06",
+    "base_path": ".planning"
+  },
+  "workflow": {
+    "auto_mode": false,
+    "require_approval": true,
+    "commit_frequency": "phase_end",
+    "research_enabled": false,
+    "testing_required": true
+  },
+  "phases": {
+    "current": 0,
+    "total": 4,
+    "names": [
+      "Foundation",
+      "Execution & Git",
+      "Output & Security",
+      "Testing & Documentation"
+    ]
+  },
+  "preferences": {
+    "language": "zh-CN",
+    "documentation_style": "comprehensive",
+    "commit_message_style": "conventional",
+    "test_coverage_threshold": 80
+  },
+  "integrations": {
+    "git": true,
+    "github": false,
+    "ci_cd": false
+  },
+  "notifications": {
+    "phase_completion": true,
+    "task_completion": true,
+    "blocking_issues": true
+  }
+}
