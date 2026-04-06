@@ -8,16 +8,22 @@
     "_comment_NonWhitelistAccess": "非白名单用户访问权限：read-only（只读）/ restricted（完全禁止）",
     "NonWhitelistAccess": "read-only"
   },
-  "_comment_Execution": "执行配置 - 控制Kimi CLI的执行参数",
+  "_comment_Execution": "执行配置 - 控制Kimi服务的执行参数",
   "Execution": {
     "_comment_KimiCliPath": "Kimi CLI 路径，默认使用系统PATH中的kimi命令",
     "KimiCliPath": "kimi",
-    "_comment_DefaultTimeoutSeconds": "默认执行超时时间（秒），超过此时间会终止进程",
+    "_comment_DefaultTimeoutSeconds": "默认执行超时时间（秒），超过此时间会取消请求",
     "DefaultTimeoutSeconds": 300,
     "_comment_MaxTimeoutSeconds": "最大允许的超时时间（秒），用户请求不能超过此值",
     "MaxTimeoutSeconds": 600,
     "_comment_BasePath": "Kimi工作空间基础路径，所有仓库将创建在此目录下",
-    "BasePath": "./kimi-workspace"
+    "BasePath": "./kimi-workspace",
+    "_comment_KimiWebBaseUrl": "Kimi Web服务基础URL（kimi web 命令启动的HTTP服务地址）",
+    "KimiWebBaseUrl": "http://127.0.0.1:5494",
+    "_comment_KimiWebPort": "Kimi Web服务端口",
+    "KimiWebPort": 5494,
+    "_comment_AutoManageKimiWeb": "是否自动管理kimi web服务进程（true=应用启动时自动启动kimi web）",
+    "AutoManageKimiWeb": false
   },
   "_comment_Output": "输出配置 - 控制消息输出格式和长度",
   "Output": {
@@ -35,6 +41,12 @@
     "_comment_AutoCommit": "是否在每次执行后自动提交更改",
     "AutoCommit": true,
     "_comment_DefaultBranch": "新仓库的默认分支名称",
-    "DefaultBranch": "main"
+    "DefaultBranch": "main",
+    "_comment_EnableHttpServer": "是否启用Git HTTP服务器（允许用户通过git clone下载仓库）",
+    "EnableHttpServer": true,
+    "_comment_HttpPort": "Git HTTP服务器端口",
+    "HttpPort": 8080,
+    "_comment_PublicGitUrl": "Git公开访问URL前缀，用于生成克隆链接",
+    "PublicGitUrl": "http://localhost:8080"
   }
 }

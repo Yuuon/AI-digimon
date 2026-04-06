@@ -6,7 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace DigimonBot.Messaging.Commands;
 
 /// <summary>
-/// Kimi代码助手命令 - 执行Kimi CLI命令进行AI辅助编程
+/// Kimi代码助手命令 - 通过 Kimi Web HTTP API 进行AI辅助编程
+/// 流程：用户发送聊天消息 → 通过HTTP调用Kimi服务 → 自动提交Git → 返回摘要消息+克隆链接
 /// </summary>
 public class KimiCommand : ICommand
 {
@@ -14,6 +15,8 @@ public class KimiCommand : ICommand
     private readonly IKimiExecutionService _executionService;
     private readonly IKimiRepositoryRepository _repoRepository;
     private readonly IKimiAgentMonitor _agentMonitor;
+    private readonly IGitCommitService _gitCommitService;
+    private readonly IGitHttpServer? _gitHttpServer;
     private readonly ILogger<KimiCommand> _logger;
 
     // 配置参数（由DI注入，从KimiConfigService获取）
@@ -25,6 +28,8 @@ public class KimiCommand : ICommand
         IKimiRepositoryRepository repoRepository,
         Func<KimiCommandConfig> getConfig,
         IKimiAgentMonitor agentMonitor,
+        IGitCommitService gitCommitService,
+        IGitHttpServer? gitHttpServer,
         ILogger<KimiCommand> logger)
     {
         _repoManager = repoManager;
@@ -32,6 +37,8 @@ public class KimiCommand : ICommand
         _repoRepository = repoRepository;
         _getConfig = getConfig;
         _agentMonitor = agentMonitor;
+        _gitCommitService = gitCommitService;
+        _gitHttpServer = gitHttpServer;
         _logger = logger;
     }
 
@@ -317,7 +324,7 @@ public class KimiCommand : ICommand
     }
 
     /// <summary>
-    /// 处理Kimi CLI执行（带忙碌保护）
+    /// 处理Kimi聊天执行（带忙碌保护 + 自动Git提交 + 克隆链接）
     /// </summary>
     private async Task<CommandResult> HandleKimiExecution(string[] args, CommandContext context, KimiCommandConfig config)
     {
@@ -347,17 +354,37 @@ public class KimiCommand : ICommand
             // 确保有可用仓库
             var repo = await _repoManager.EnsureRepositoryExistsAsync(context.OriginalUserId);
 
-            // 构建Kimi CLI参数
-            var kimiArgs = string.Join(" ", args);
+            // 构建聊天消息（将所有参数合并为一条消息）
+            var chatMessage = string.Join(" ", args);
 
             // 更新仓库使用信息
             await _repoRepository.UpdateLastUsedAsync(repo.Name);
             await _repoRepository.IncrementSessionCountAsync(repo.Name);
 
-            // 执行Kimi CLI（传入取消令牌）
-            var result = await _executionService.ExecuteAsync(repo.Path, kimiArgs, config.DefaultTimeoutSeconds, cancellationToken);
+            // 通过 HTTP API 执行 Kimi 聊天
+            var result = await _executionService.ExecuteAsync(repo.Path, chatMessage, config.DefaultTimeoutSeconds, cancellationToken);
 
-            // 格式化输出
+            // 自动提交 Git（如果启用且执行成功）
+            if (result.Success && config.AutoCommit)
+            {
+                try
+                {
+                    var commitHash = await _gitCommitService.CommitChangesAsync(
+                        repo.Path, context.OriginalUserId, chatMessage, result.DurationMs);
+
+                    if (commitHash != null)
+                    {
+                        result.CommitHash = commitHash;
+                        result.Committed = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[KimiCommand] 自动Git提交失败，但不影响执行结果");
+                }
+            }
+
+            // 格式化输出（包含提交信息和克隆链接）
             return FormatExecutionResult(result, repo.Name);
         }
         finally
@@ -368,9 +395,9 @@ public class KimiCommand : ICommand
     }
 
     /// <summary>
-    /// 格式化执行结果
+    /// 格式化执行结果（包含Git提交信息和克隆链接）
     /// </summary>
-    private static CommandResult FormatExecutionResult(ExecutionResult result, string repoName)
+    private CommandResult FormatExecutionResult(ExecutionResult result, string repoName)
     {
         if (result.Success)
         {
@@ -381,14 +408,26 @@ public class KimiCommand : ICommand
                 output = output[..1900] + $"\n\n... (输出已截断，共 {result.Output.Length} 字符)";
             }
 
+            var message = $"🤖 **Kimi 执行结果** (仓库: {repoName}, 耗时: {result.DurationMs}ms)\n\n{output}";
+
+            // 添加 Git 提交信息
+            if (result.Committed && result.CommitHash != null)
+            {
+                var shortHash = result.CommitHash.Length >= 8 ? result.CommitHash[..8] : result.CommitHash;
+                message += $"\n\n✅ 已自动提交到 Git\n提交: {shortHash}";
+            }
+            else
+            {
+                message += "\n\nℹ️ 无文件变更";
+            }
+
+            // 添加克隆链接
+            message += FormatCloneUrl(repoName);
+
             return new CommandResult
             {
                 Success = true,
-                Message = $"""
-                    ✅ **Kimi执行完成** (仓库: {repoName}, 耗时: {result.DurationMs}ms)
-
-                    {output}
-                    """
+                Message = message
             };
         }
         else
@@ -403,12 +442,24 @@ public class KimiCommand : ICommand
             {
                 Success = false,
                 Message = $"""
-                    ❌ **Kimi执行失败** (仓库: {repoName}, 耗时: {result.DurationMs}ms, 退出码: {result.ExitCode})
+                    ❌ **Kimi执行失败** (仓库: {repoName}, 耗时: {result.DurationMs}ms)
 
                     {error}
                     """
             };
         }
+    }
+
+    /// <summary>
+    /// 格式化克隆链接
+    /// </summary>
+    private string FormatCloneUrl(string repoName)
+    {
+        if (_gitHttpServer?.IsRunning != true)
+            return "";
+
+        var url = _gitHttpServer.GetCloneUrl(repoName);
+        return $"\n\n💡 克隆仓库:\ngit clone {url}";
     }
 
     private static string FormatElapsed(TimeSpan elapsed)
@@ -442,17 +493,16 @@ public class KimiCommand : ICommand
                   --switch-repo <名称>  切换到指定仓库
                   --current-repo        显示当前仓库
 
-                Kimi CLI 选项:
-                  --prompt, -p <文本>   发送消息给Kimi
-                  --model, -m <模型>    指定模型
-                  --yolo, -y           自动确认所有操作
-                  --plan               计划模式
-                  --thinking           启用思考模式
+                聊天模式:
+                  直接输入消息即可与 Kimi 对话
+                  Kimi 将自动在当前仓库中执行代码操作
+                  执行完成后会自动提交 Git 并返回克隆链接
 
                 示例:
                   /kimi --new-repo my-project
                   /kimi --switch-repo my-project
                   /kimi 用Python写个Hello World
+                  /kimi 分析这个项目的代码结构
                   /kimi --status
                   /kimi --cancel
                 """
@@ -476,4 +526,7 @@ public class KimiCommandConfig
 
     /// <summary>默认超时时间（秒）</summary>
     public int DefaultTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>是否自动提交Git</summary>
+    public bool AutoCommit { get; set; } = true;
 }

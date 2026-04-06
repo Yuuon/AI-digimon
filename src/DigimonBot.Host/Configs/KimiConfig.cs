@@ -73,6 +73,21 @@ public class ExecutionConfig
     /// 工作空间基础路径
     /// </summary>
     public string BasePath { get; set; } = "./kimi-workspace";
+
+    /// <summary>
+    /// Kimi Web 服务基础URL
+    /// </summary>
+    public string KimiWebBaseUrl { get; set; } = "http://127.0.0.1:5494";
+
+    /// <summary>
+    /// Kimi Web 服务端口
+    /// </summary>
+    public int KimiWebPort { get; set; } = 5494;
+
+    /// <summary>
+    /// 是否自动管理 kimi web 服务进程生命周期
+    /// </summary>
+    public bool AutoManageKimiWeb { get; set; } = false;
 }
 
 /// <summary>
@@ -115,4 +130,19 @@ public class GitConfig
     /// 默认分支名称
     /// </summary>
     public string DefaultBranch { get; set; } = "main";
+
+    /// <summary>
+    /// 是否启用 Git HTTP 服务器
+    /// </summary>
+    public bool EnableHttpServer { get; set; } = true;
+
+    /// <summary>
+    /// Git HTTP 服务器端口
+    /// </summary>
+    public int HttpPort { get; set; } = 8080;
+
+    /// <summary>
+    /// Git 公开访问 URL
+    /// </summary>
+    public string PublicGitUrl { get; set; } = "http://localhost:8080";
 }

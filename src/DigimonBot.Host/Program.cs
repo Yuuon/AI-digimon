@@ -333,10 +333,13 @@ public class Program
                                 AccessMode = currentCfg.AccessControl.Mode,
                                 Whitelist = new List<string>(currentCfg.AccessControl.Whitelist),
                                 NonWhitelistAccess = currentCfg.AccessControl.NonWhitelistAccess,
-                                DefaultTimeoutSeconds = currentCfg.Execution.DefaultTimeoutSeconds
+                                DefaultTimeoutSeconds = currentCfg.Execution.DefaultTimeoutSeconds,
+                                AutoCommit = currentCfg.Git.AutoCommit
                             };
                         },
                         provider.GetRequiredService<IKimiAgentMonitor>(),
+                        provider.GetRequiredService<IGitCommitService>(),
+                        provider.GetService<IGitHttpServer>(),
                         provider.GetRequiredService<ILogger<KimiCommand>>()));
 
                     return registry;
@@ -362,13 +365,50 @@ public class Program
                         kimiConfig.CurrentConfig.Git.DefaultBranch);
                 });
 
-                services.AddSingleton<IKimiExecutionService>(provider =>
+                // 注册 Kimi Web 服务客户端（HTTP API 方式）
+                services.AddSingleton<IKimiServiceClient>(provider =>
                 {
                     var kimiConfig = provider.GetRequiredService<KimiConfigService>();
-                    return new KimiExecutionService(
-                        provider.GetRequiredService<ILogger<KimiExecutionService>>(),
-                        kimiConfig.CurrentConfig.Execution.KimiCliPath);
+                    var options = new DigimonBot.Core.Models.Kimi.KimiServiceOptions
+                    {
+                        BaseUrl = kimiConfig.CurrentConfig.Execution.KimiWebBaseUrl,
+                        Port = kimiConfig.CurrentConfig.Execution.KimiWebPort,
+                        AutoManageProcess = kimiConfig.CurrentConfig.Execution.AutoManageKimiWeb,
+                        KimiExecutablePath = kimiConfig.CurrentConfig.Execution.KimiCliPath,
+                        DefaultWorkDir = kimiConfig.CurrentConfig.Execution.BasePath,
+                        TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds
+                    };
+                    return new DigimonBot.AI.Services.KimiServiceClient(
+                        options,
+                        provider.GetRequiredService<ILogger<DigimonBot.AI.Services.KimiServiceClient>>());
                 });
+
+                services.AddSingleton<IKimiExecutionService>(provider =>
+                {
+                    return new KimiExecutionService(
+                        provider.GetRequiredService<IKimiServiceClient>(),
+                        provider.GetRequiredService<ILogger<KimiExecutionService>>());
+                });
+
+                // 注册 Git 提交服务
+                services.AddSingleton<IGitCommitService>(provider =>
+                    new GitCommitService(provider.GetRequiredService<ILogger<GitCommitService>>()));
+
+                // 注册 Git HTTP 服务器（条件启用）
+                services.AddSingleton<IGitHttpServer>(provider =>
+                {
+                    var kimiConfig = provider.GetRequiredService<KimiConfigService>();
+                    return new GitHttpServer(
+                        provider.GetRequiredService<ILogger<GitHttpServer>>(),
+                        kimiConfig.CurrentConfig.Execution.BasePath,
+                        kimiConfig.CurrentConfig.Git.HttpPort,
+                        kimiConfig.CurrentConfig.Git.PublicGitUrl,
+                        kimiConfig.CurrentConfig.Git.EnableHttpServer);
+                });
+
+                // Git HTTP 服务器注册为托管服务（EnableHttpServer 在运行时检查）
+                services.AddHostedService(provider =>
+                    (GitHttpServer)provider.GetRequiredService<IGitHttpServer>());
 
                 // 注册消息处理器
                 services.AddSingleton<IMessageHandler, DigimonMessageHandler>();
