@@ -380,3 +380,122 @@ sqlite3 Data/kimi_data.db "PRAGMA table_info(CustomCommands);"
 | `no such table` | Wrong DB file or table not yet created | Check `.tables`; confirm the correct `.db` path |
 | `UNIQUE constraint failed` | Duplicate primary key / unique column | Query existing rows first, use a different value |
 | `NOT NULL constraint failed` | Missing required column value | Provide a value for all non-nullable columns |
+
+## Internal Command Placeholders
+
+All built-in bot commands are also seeded into the `CustomCommands` table as **placeholders**
+so that a single query returns every registered command (both internal and user-created).
+
+Placeholder rows are identified by `BinaryPath = 'INTERNAL'` and `OwnerUserId = 'SYSTEM'`.
+
+```sql
+-- List ALL commands (internal + custom)
+SELECT Name, Aliases, Description FROM CustomCommands ORDER BY Name;
+
+-- List only built-in commands
+SELECT Name, Aliases, Description FROM CustomCommands WHERE BinaryPath = 'INTERNAL';
+
+-- List only user-created custom commands
+SELECT Name, Aliases, Description FROM CustomCommands WHERE BinaryPath != 'INTERNAL';
+```
+
+To re-seed internal commands after a fresh database reset, run:
+```bash
+bash scripts/seed_internal_commands.sh
+```
+
+---
+
+# SKILL: Monitoring & Debugging Kimi Agent Actions
+
+## Overview
+
+When the Kimi AI agent appears to be stuck, looping, or not responding, the following
+techniques help diagnose what is happening inside the ACP (Agent Client Protocol) session.
+
+## 1. Live Log Tailing
+
+The bot logs all ACP communication at different levels. Increase log verbosity to see
+tool-call attempts, agent thoughts, and session updates:
+
+```bash
+# Tail the bot log (adjust path/method to your deployment)
+journalctl -u digimon-bot -f --no-pager
+
+# Or if running directly:
+dotnet run --project src/DigimonBot.Host/DigimonBot.Host.csproj 2>&1 | tee bot.log
+```
+
+### Key Log Prefixes
+
+| Prefix | Meaning |
+|---|---|
+| `[KimiAcp] ->` | Outgoing JSON-RPC request to ACP process |
+| `[KimiAcp] <-` | Incoming JSON-RPC response from ACP process |
+| `[KimiAcp] session/update` | Streaming notification (thoughts, tool calls, content chunks) |
+| `[KimiAcp] stderr:` | ACP process stderr output (errors, warnings) |
+| `[KimiService] 流式块` | Content chunk received by the service layer |
+| `[KimiService] 强制回收` | ACP connection being recycled after error/timeout |
+| `[KimiExec]` | Execution lifecycle (start, complete, timeout, cancel) |
+
+### Useful Update Types in session/update
+
+| UpdateType | Meaning |
+|---|---|
+| `agent_message_chunk` | AI is writing a text response (content in log) |
+| `agent_thought_chunk` | AI is "thinking" (internal reasoning) |
+| `tool_call` | AI is invoking a tool (e.g., bash, file edit) |
+| `tool_result` | Tool execution result returned to AI |
+| `available_commands_update` | List of available commands refreshed |
+
+## 2. Adjusting Log Level
+
+In `appsettings.json` or environment variables, set the log level for the AI namespace
+to `Debug` to capture **all** ACP traffic including raw JSON:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "DigimonBot.AI": "Debug"
+    }
+  }
+}
+```
+
+Or via environment variable:
+```bash
+export Logging__LogLevel__DigimonBot.AI=Debug
+```
+
+## 3. Cancelling a Stuck Agent
+
+```
+/kimi --cancel
+```
+
+This sends a `session/cancel` to the ACP process, then recycles the connection.
+If the agent remains stuck after cancel, the ACP process will be killed and a fresh
+one will be spawned on the next request.
+
+## 4. Checking Agent Status
+
+```
+/kimi --status
+```
+
+Shows whether the agent is busy, which user started the task, and how long it has
+been running.
+
+## 5. Common Stuck Scenarios
+
+### Agent looping on tool calls
+**Symptom:** Repeated `tool_call` / `tool_result` updates in logs with no `agent_message_chunk`.
+**Cause:** Tool (e.g., sqlite3) returns an error the agent keeps retrying.
+**Fix:** Cancel the task (`/kimi --cancel`), fix the underlying tool issue, then retry.
+
+### Agent stuck after cancellation
+**Symptom:** Next request fails with "ACP 服务不可用" or internal error.
+**Cause:** Old ACP process was not fully terminated.
+**Fix:** The bot auto-recycles the connection on error. Wait a few seconds and retry.
+If persistent, restart the bot service.

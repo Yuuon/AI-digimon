@@ -116,13 +116,15 @@ public class KimiServiceClient : IKimiServiceClient
 
         // ACP 协议下同一时间只能处理一个 prompt
         await _chatLock.WaitAsync(ct);
+
+        // Hoist session ID so catch blocks can send session/cancel to the ACP process
+        string? activeSessionId = null;
         try
         {
             var client = _client!;
             var effectiveWorkDir = workDir ?? _options.DefaultWorkDir ?? ".";
 
             // 创建或恢复会话
-            string activeSessionId;
             if (string.IsNullOrEmpty(sessionId))
             {
                 var newSession = await client.CreateSessionAsync(effectiveWorkDir, ct);
@@ -149,9 +151,11 @@ public class KimiServiceClient : IKimiServiceClient
             // 收集流式响应
             var messageBuilder = new StringBuilder();
             int chunkCount = 0;
+            // Capture for closure — activeSessionId is non-null at this point
+            var capturedSessionId = activeSessionId;
             void HandleUpdate(object? sender, SessionUpdateEventArgs e)
             {
-                if (e.SessionId != activeSessionId) return;
+                if (e.SessionId != capturedSessionId) return;
                 if (e.UpdateType == "agent_message_chunk" && e.Content != null)
                 {
                     messageBuilder.Append(e.Content);
@@ -163,7 +167,7 @@ public class KimiServiceClient : IKimiServiceClient
                 else if (e.UpdateType != null)
                 {
                     _logger.LogDebug("[KimiService] 收到更新 [{UpdateType}] sess={SessionId}",
-                        e.UpdateType, activeSessionId.Length > SessionIdLogLength ? activeSessionId[..SessionIdLogLength] : activeSessionId);
+                        e.UpdateType, capturedSessionId.Length > SessionIdLogLength ? capturedSessionId[..SessionIdLogLength] : capturedSessionId);
                 }
             }
 
@@ -201,13 +205,15 @@ public class KimiServiceClient : IKimiServiceClient
         }
         catch (OperationCanceledException)
         {
-            // 超时或取消后 ACP 进程可能处于不确定状态，强制回收
+            // 超时或取消: 先通过 ACP 协议通知 agent 停止当前操作，再回收进程
+            await TrySendSessionCancelAsync(activeSessionId);
             ForceRecycleClient("OperationCanceled (超时/取消)");
             throw;
         }
         catch (Exception ex) when (ex is not KimiServiceException)
         {
             // 任何非预期异常后也需要回收，防止 ACP 进程卡死
+            await TrySendSessionCancelAsync(activeSessionId);
             ForceRecycleClient(ex.GetType().Name + ": " + ex.Message);
             throw;
         }
@@ -298,6 +304,27 @@ public class KimiServiceClient : IKimiServiceClient
             _logger.LogDebug(ex, "[KimiService] 回收时 Dispose 异常 (已忽略)");
         }
         _client = null;
+    }
+
+    /// <summary>
+    /// 尝试通过 ACP 协议发送 session/cancel 请求，通知 Kimi agent 停止当前操作。
+    /// 使用短超时，失败时不抛异常（后续会由 ForceRecycleClient 强制回收进程）。
+    /// </summary>
+    private async Task TrySendSessionCancelAsync(string? sessionId)
+    {
+        if (string.IsNullOrEmpty(sessionId) || _client?.IsConnected != true)
+            return;
+
+        try
+        {
+            using var cancelCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await _client.CancelAsync(sessionId, cancelCts.Token);
+            _logger.LogInformation("[KimiService] 已向 ACP 发送 session/cancel (会话: {SessionId})", sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[KimiService] 发送 session/cancel 失败 (已忽略，将由 ForceRecycle 回收)");
+        }
     }
 
     /// <summary>

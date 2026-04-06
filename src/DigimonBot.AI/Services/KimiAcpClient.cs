@@ -227,8 +227,22 @@ public class KimiAcpClient : IDisposable
                 content = textElement.GetString();
             }
 
+            // Extract tool-call information when available (helps track what the AI agent is doing)
+            string? toolName = null;
+            if (update.TryGetProperty("toolName", out var toolNameElement))
+            {
+                toolName = toolNameElement.GetString();
+            }
+
             var shortSessionId = sessionId.Length > SessionIdLogLength ? sessionId[..SessionIdLogLength] : sessionId;
-            if (content != null)
+
+            // Log tool-call related updates at Information level for better debugging
+            if (toolName != null)
+            {
+                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] tool={ToolName} sess={SessionId}",
+                    updateType, toolName, shortSessionId);
+            }
+            else if (content != null)
             {
                 var preview = content.Length > SessionUpdatePreviewLength ? content[..SessionUpdatePreviewLength] + "..." : content;
                 _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] sess={SessionId}: {Preview}",
@@ -236,7 +250,8 @@ public class KimiAcpClient : IDisposable
             }
             else
             {
-                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] sess={SessionId}",
+                // Non-content, non-tool updates logged at Debug to reduce noise
+                _logger?.LogDebug("[KimiAcp] session/update [{UpdateType}] sess={SessionId}",
                     updateType, shortSessionId);
             }
 
@@ -283,7 +298,7 @@ public class KimiAcpClient : IDisposable
 
         try
         {
-            // 使用调用方传入的 CancellationToken 控制超时，不再硬编码 5 分钟
+            // 使用调用方传入的 CancellationToken 控制超时和取消
             return await tcs.Task.WaitAsync(ct);
         }
         catch (OperationCanceledException)
