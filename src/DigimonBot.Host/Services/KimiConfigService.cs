@@ -10,7 +10,7 @@ namespace DigimonBot.Host.Services;
 public class KimiConfigService : IDisposable
 {
     private readonly ILogger<KimiConfigService> _logger;
-    private FileSystemWatcher _watcher;
+    private FileSystemWatcher? _watcher;
     private KimiConfig _currentConfig;
     private readonly string _configPath;
     private DateTime _lastReload = DateTime.MinValue;
