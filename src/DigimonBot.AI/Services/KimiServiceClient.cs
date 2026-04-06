@@ -18,6 +18,12 @@ public class KimiServiceClient : IKimiServiceClient
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly SemaphoreSlim _chatLock = new(1, 1);
 
+    /// <summary>
+    /// ACP 协议中表示 AI 回复正常结束的 stopReason 值
+    /// </summary>
+    private const string StopReasonEndTurn = "end_turn";
+    private const string StopReasonStop = "stop";
+
     public KimiServiceClient(
         KimiServiceOptions options,
         ILogger<KimiServiceClient> logger)
@@ -157,7 +163,7 @@ public class KimiServiceClient : IKimiServiceClient
                 {
                     Response = messageBuilder.ToString(),
                     SessionId = activeSessionId,
-                    Completed = result.StopReason == "end_turn" || result.StopReason == "stop"
+                    Completed = result.StopReason == StopReasonEndTurn || result.StopReason == StopReasonStop
                 };
             }
             finally
@@ -202,12 +208,13 @@ public class KimiServiceClient : IKimiServiceClient
         var effectiveWorkDir = workDir ?? _options.DefaultWorkDir ?? ".";
         var result = await _client!.CreateSessionAsync(effectiveWorkDir, ct);
 
+        var now = DateTime.UtcNow;
         return new KimiSessionInfo
         {
             Id = result.SessionId,
             WorkDir = effectiveWorkDir,
-            CreatedAt = DateTime.UtcNow,
-            LastActivity = DateTime.UtcNow,
+            CreatedAt = now,
+            LastActivity = now,
             MessageCount = 0
         };
     }
