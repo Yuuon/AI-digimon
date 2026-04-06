@@ -88,6 +88,11 @@ public class ExecutionConfig
     /// 是否自动管理 kimi web 服务进程生命周期
     /// </summary>
     public bool AutoManageKimiWeb { get; set; } = false;
+
+    /// <summary>
+    /// 是否自动批准工具调用（YOLO 模式）。启用后，AI 可以自动执行 Shell 命令和文件操作。
+    /// </summary>
+    public bool AutoApproveTools { get; set; } = true;
 }
 
 /// <summary>

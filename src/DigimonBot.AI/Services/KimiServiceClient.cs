@@ -63,7 +63,8 @@ public class KimiServiceClient : IKimiServiceClient
             _client = new KimiAcpClient(
                 kimiExecutablePath: string.IsNullOrEmpty(_options.KimiExecutablePath)
                     ? null
-                    : _options.KimiExecutablePath);
+                    : _options.KimiExecutablePath,
+                autoApproveTools: _options.AutoApproveTools);
 
             await _client.ConnectAsync(ct);
             var initResult = await _client.InitializeAsync(ct);

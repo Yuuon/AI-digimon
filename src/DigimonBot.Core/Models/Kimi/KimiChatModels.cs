@@ -105,6 +105,11 @@ public class KimiServiceOptions
     /// kimi web 服务端口
     /// </summary>
     public int Port { get; set; } = 5494;
+
+    /// <summary>
+    /// 是否自动批准工具调用（YOLO 模式）。启用后，AI 可以自动执行 Shell 命令和文件操作。
+    /// </summary>
+    public bool AutoApproveTools { get; set; } = true;
 }
 
 /// <summary>

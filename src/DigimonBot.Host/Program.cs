@@ -389,7 +389,8 @@ public class Program
                     {
                         KimiExecutablePath = kimiConfig.CurrentConfig.Execution.KimiCliPath,
                         DefaultWorkDir = kimiConfig.CurrentConfig.Execution.BasePath,
-                        TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds
+                        TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds,
+                        AutoApproveTools = kimiConfig.CurrentConfig.Execution.AutoApproveTools
                     };
                     return new DigimonBot.AI.Services.KimiServiceClient(
                         options,
