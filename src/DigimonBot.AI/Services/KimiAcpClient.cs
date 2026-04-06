@@ -150,12 +150,14 @@ public class KimiAcpClient : IDisposable
                             {
                                 if (root.TryGetProperty("result", out var result))
                                 {
+                                    _logger?.LogInformation("[KimiAcp] <- 收到响应 id={Id} (result)", id);
                                     tcs.TrySetResult(result.Clone());
                                 }
                                 else if (root.TryGetProperty("error", out var error))
                                 {
                                     var errorMsg = error.GetProperty("message").GetString() ?? "Unknown error";
                                     var errorCode = error.TryGetProperty("code", out var code) ? code.GetInt32() : 0;
+                                    _logger?.LogWarning("[KimiAcp] <- 收到错误响应 id={Id}: [{Code}] {Msg}", id, errorCode, errorMsg);
                                     tcs.TrySetException(new KimiAcpException(errorMsg, errorCode));
                                 }
                                 _pendingRequests.Remove(id);
@@ -166,6 +168,7 @@ public class KimiAcpClient : IDisposable
                     {
                         // 这是通知
                         var method = methodElement.GetString();
+                        _logger?.LogInformation("[KimiAcp] 收到通知: {Method}", method);
                         if (method == "session/update" && root.TryGetProperty("params", out var paramsElement))
                         {
                             HandleSessionUpdate(paramsElement.Clone());
@@ -224,6 +227,19 @@ public class KimiAcpClient : IDisposable
                 content = textElement.GetString();
             }
 
+            var shortSessionId = sessionId.Length > SessionIdLogLength ? sessionId[..SessionIdLogLength] : sessionId;
+            if (content != null)
+            {
+                var preview = content.Length > SessionUpdatePreviewLength ? content[..SessionUpdatePreviewLength] + "..." : content;
+                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] sess={SessionId}: {Preview}",
+                    updateType, shortSessionId, preview);
+            }
+            else
+            {
+                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] sess={SessionId}",
+                    updateType, shortSessionId);
+            }
+
             OnSessionUpdate?.Invoke(this, new SessionUpdateEventArgs
             {
                 SessionId = sessionId,
@@ -259,6 +275,7 @@ public class KimiAcpClient : IDisposable
         };
 
         var json = JsonSerializer.Serialize(request, JsonOptions);
+        _logger?.LogInformation("[KimiAcp] -> 发送请求 [{Method}] id={Id}", method, id);
         _logger?.LogDebug("[KimiAcp] -> {Json}", json);
 
         await _stdin!.WriteLineAsync(json);
@@ -389,6 +406,9 @@ public class KimiAcpClient : IDisposable
 
     #region 工具方法
 
+    private const int SessionIdLogLength = 8;
+    private const int SessionUpdatePreviewLength = 80;
+
     /// <summary>
     /// 解析 kimi 可执行文件路径，将相对名称（如 "kimi"）解析为绝对路径。
     /// 当进程以服务方式运行时，PATH 可能不包含 kimi 的安装目录，
@@ -403,7 +423,15 @@ public class KimiAcpClient : IDisposable
         if (Path.IsPathRooted(executableName) && File.Exists(executableName))
             return executableName;
 
-        // Extract just the filename for searching (handles cases like "./kimi" or relative paths)
+        // If a relative path was provided and it resolves to an existing file, use the full path
+        if (executableName.Contains(Path.DirectorySeparatorChar) || executableName.Contains('/'))
+        {
+            var fullRelative = Path.GetFullPath(executableName);
+            if (File.Exists(fullRelative))
+                return fullRelative;
+        }
+
+        // Extract just the filename for searching well-known locations and PATH
         var fileName = Path.GetFileName(executableName);
 
         // Well-known installation locations (checked first since service PATH may be minimal)

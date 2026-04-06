@@ -23,6 +23,8 @@ public class KimiServiceClient : IKimiServiceClient
     /// </summary>
     private const string StopReasonEndTurn = "end_turn";
     private const string StopReasonStop = "stop";
+    private const int StreamChunkPreviewLength = 60;
+    private const int SessionIdLogLength = 8;
 
     public KimiServiceClient(
         KimiServiceOptions options,
@@ -140,12 +142,22 @@ public class KimiServiceClient : IKimiServiceClient
 
             // 收集流式响应
             var messageBuilder = new StringBuilder();
+            int chunkCount = 0;
             void HandleUpdate(object? sender, SessionUpdateEventArgs e)
             {
                 if (e.SessionId != activeSessionId) return;
                 if (e.UpdateType == "agent_message_chunk" && e.Content != null)
                 {
                     messageBuilder.Append(e.Content);
+                    chunkCount++;
+                    var preview = e.Content.Length > StreamChunkPreviewLength ? e.Content[..StreamChunkPreviewLength] + "..." : e.Content;
+                    _logger.LogInformation("[KimiService] 流式块 #{Seq} [{UpdateType}]: {Preview}",
+                        chunkCount, e.UpdateType, preview);
+                }
+                else if (e.UpdateType != null)
+                {
+                    _logger.LogInformation("[KimiService] 收到更新 [{UpdateType}] sess={SessionId}",
+                        e.UpdateType, activeSessionId.Length > SessionIdLogLength ? activeSessionId[..SessionIdLogLength] : activeSessionId);
                 }
             }
 
@@ -157,7 +169,8 @@ public class KimiServiceClient : IKimiServiceClient
 
                 var result = await client.SendPromptAsync(activeSessionId, message, ct);
 
-                _logger.LogInformation("[KimiService] ACP 聊天完成, StopReason: {StopReason}", result.StopReason);
+                _logger.LogInformation("[KimiService] ACP 聊天完成, StopReason: {StopReason}, 共收到 {ChunkCount} 个流式块, 响应长度: {Len} 字符",
+                    result.StopReason, chunkCount, messageBuilder.Length);
 
                 return new KimiChatResponse
                 {
