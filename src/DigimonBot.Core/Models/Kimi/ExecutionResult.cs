@@ -1,7 +1,7 @@
 namespace DigimonBot.Core.Models.Kimi;
 
 /// <summary>
-/// Kimi CLI 执行结果
+/// Kimi 执行结果
 /// </summary>
 public class ExecutionResult
 {
@@ -11,7 +11,7 @@ public class ExecutionResult
     public bool Success { get; set; }
 
     /// <summary>
-    /// 标准输出内容
+    /// 响应输出内容
     /// </summary>
     public string Output { get; set; } = "";
 
@@ -21,7 +21,7 @@ public class ExecutionResult
     public string Error { get; set; } = "";
 
     /// <summary>
-    /// 进程退出码
+    /// 退出码（HTTP 状态码或 -1 表示异常）
     /// </summary>
     public int ExitCode { get; set; }
 
@@ -29,4 +29,19 @@ public class ExecutionResult
     /// 执行耗时（毫秒）
     /// </summary>
     public int DurationMs { get; set; }
+
+    /// <summary>
+    /// Kimi 会话ID
+    /// </summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// Git 提交哈希（自动提交时填充）
+    /// </summary>
+    public string? CommitHash { get; set; }
+
+    /// <summary>
+    /// 是否已自动提交到 Git
+    /// </summary>
+    public bool Committed { get; set; }
 }
