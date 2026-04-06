@@ -146,10 +146,10 @@ public class KimiAcpSession : IDisposable
             // 发送 prompt
             var responseTask = _client.SendPromptAsync(_sessionId!, message, ct);
             
-            // 等待流式输出完成或超时
+            // 等待流式输出完成或取消（由调用方 CancellationToken 控制超时）
             var completedTask = await Task.WhenAny(
                 _promptCompletion.Task,
-                Task.Delay(TimeSpan.FromMinutes(5), ct)
+                Task.Delay(Timeout.Infinite, ct)
             );
 
             if (completedTask != _promptCompletion.Task)
@@ -217,10 +217,10 @@ public class KimiAcpSession : IDisposable
             // 发送 prompt
             var responseTask = _client.SendPromptAsync(_sessionId!, message, ct);
 
-            // 等待完成
+            // 等待完成（由调用方 CancellationToken 控制超时）
             var completedTask = await Task.WhenAny(
                 completionTcs.Task,
-                Task.Delay(TimeSpan.FromMinutes(5), ct)
+                Task.Delay(Timeout.Infinite, ct)
             );
 
             if (completedTask != completionTcs.Task)

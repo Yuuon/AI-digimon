@@ -40,7 +40,7 @@ public class KimiAcpClient : IDisposable
     public KimiAcpClient(ILogger<KimiAcpClient>? logger = null, string? kimiExecutablePath = null)
     {
         _logger = logger;
-        _kimiExecutablePath = kimiExecutablePath ?? FindKimiExecutable();
+        _kimiExecutablePath = ResolveKimiExecutablePath(kimiExecutablePath);
     }
 
     #region 连接管理
@@ -56,7 +56,7 @@ public class KimiAcpClient : IDisposable
             return;
         }
 
-        _logger?.LogInformation("[KimiAcp] 正在启动 ACP 服务...");
+        _logger?.LogInformation("[KimiAcp] 正在启动 ACP 服务, 可执行文件路径: {Path}", _kimiExecutablePath);
 
         var psi = new ProcessStartInfo
         {
@@ -150,12 +150,14 @@ public class KimiAcpClient : IDisposable
                             {
                                 if (root.TryGetProperty("result", out var result))
                                 {
+                                    _logger?.LogInformation("[KimiAcp] <- 收到响应 id={Id} (result)", id);
                                     tcs.TrySetResult(result.Clone());
                                 }
                                 else if (root.TryGetProperty("error", out var error))
                                 {
                                     var errorMsg = error.GetProperty("message").GetString() ?? "Unknown error";
                                     var errorCode = error.TryGetProperty("code", out var code) ? code.GetInt32() : 0;
+                                    _logger?.LogWarning("[KimiAcp] <- 收到错误响应 id={Id}: [{Code}] {Msg}", id, errorCode, errorMsg);
                                     tcs.TrySetException(new KimiAcpException(errorMsg, errorCode));
                                 }
                                 _pendingRequests.Remove(id);
@@ -166,6 +168,7 @@ public class KimiAcpClient : IDisposable
                     {
                         // 这是通知
                         var method = methodElement.GetString();
+                        _logger?.LogInformation("[KimiAcp] 收到通知: {Method}", method);
                         if (method == "session/update" && root.TryGetProperty("params", out var paramsElement))
                         {
                             HandleSessionUpdate(paramsElement.Clone());
@@ -224,6 +227,34 @@ public class KimiAcpClient : IDisposable
                 content = textElement.GetString();
             }
 
+            // Extract tool-call information when available (helps track what the AI agent is doing)
+            string? toolName = null;
+            if (update.TryGetProperty("toolName", out var toolNameElement))
+            {
+                toolName = toolNameElement.GetString();
+            }
+
+            var shortSessionId = sessionId.Length > SessionIdLogLength ? sessionId[..SessionIdLogLength] : sessionId;
+
+            // Log tool-call related updates at Information level for better debugging
+            if (toolName != null)
+            {
+                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] tool={ToolName} sess={SessionId}",
+                    updateType, toolName, shortSessionId);
+            }
+            else if (content != null)
+            {
+                var preview = content.Length > SessionUpdatePreviewLength ? content[..SessionUpdatePreviewLength] + "..." : content;
+                _logger?.LogInformation("[KimiAcp] session/update [{UpdateType}] sess={SessionId}: {Preview}",
+                    updateType, shortSessionId, preview);
+            }
+            else
+            {
+                // Non-content, non-tool updates logged at Debug to reduce noise
+                _logger?.LogDebug("[KimiAcp] session/update [{UpdateType}] sess={SessionId}",
+                    updateType, shortSessionId);
+            }
+
             OnSessionUpdate?.Invoke(this, new SessionUpdateEventArgs
             {
                 SessionId = sessionId,
@@ -259,25 +290,24 @@ public class KimiAcpClient : IDisposable
         };
 
         var json = JsonSerializer.Serialize(request, JsonOptions);
+        _logger?.LogInformation("[KimiAcp] -> 发送请求 [{Method}] id={Id}", method, id);
         _logger?.LogDebug("[KimiAcp] -> {Json}", json);
 
         await _stdin!.WriteLineAsync(json);
         await _stdin.FlushAsync();
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(5)); // 5 分钟超时
-
         try
         {
-            return await tcs.Task.WaitAsync(cts.Token);
+            // 使用调用方传入的 CancellationToken 控制超时和取消
+            return await tcs.Task.WaitAsync(ct);
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException)
         {
             lock (_lock)
             {
                 _pendingRequests.Remove(id);
             }
-            throw new TimeoutException($"请求 {method} 超时");
+            throw;
         }
     }
 
@@ -389,23 +419,64 @@ public class KimiAcpClient : IDisposable
 
     #region 工具方法
 
-    private static string FindKimiExecutable()
+    private const int SessionIdLogLength = 8;
+    private const int SessionUpdatePreviewLength = 80;
+
+    /// <summary>
+    /// 解析 kimi 可执行文件路径，将相对名称（如 "kimi"）解析为绝对路径。
+    /// 当进程以服务方式运行时，PATH 可能不包含 kimi 的安装目录，
+    /// 因此需要主动搜索常见安装位置。
+    /// </summary>
+    private static string ResolveKimiExecutablePath(string? providedPath)
     {
-        var candidates = new[]
+        // Determine the executable name to search for
+        var executableName = string.IsNullOrWhiteSpace(providedPath) ? "kimi" : providedPath;
+
+        // If an absolute path was provided and the file exists, use it directly
+        if (Path.IsPathRooted(executableName) && File.Exists(executableName))
+            return executableName;
+
+        // If a relative path was provided and it resolves to an existing file, use the full path
+        if (executableName.Contains(Path.DirectorySeparatorChar) || executableName.Contains('/'))
         {
-            "kimi",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "kimi"),
-            "/usr/local/bin/kimi",
-            "/usr/bin/kimi"
+            var fullRelative = Path.GetFullPath(executableName);
+            if (File.Exists(fullRelative))
+                return fullRelative;
+        }
+
+        // Extract just the filename for searching well-known locations and PATH
+        var fileName = Path.GetFileName(executableName);
+
+        // Well-known installation locations (checked first since service PATH may be minimal)
+        var wellKnownPaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", fileName),
+            $"/usr/local/bin/{fileName}",
+            $"/usr/bin/{fileName}"
         };
 
-        foreach (var candidate in candidates)
+        foreach (var candidate in wellKnownPaths)
         {
-            if (candidate == "kimi" || File.Exists(candidate))
+            if (File.Exists(candidate))
                 return candidate;
         }
 
-        throw new FileNotFoundException("无法找到 kimi 可执行文件");
+        // Search PATH environment variable directories
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(pathEnv))
+        {
+            foreach (var dir in pathEnv.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(dir)) continue;
+
+                var fullPath = Path.Combine(dir, fileName);
+                if (File.Exists(fullPath))
+                    return fullPath;
+            }
+        }
+
+        // Fallback: return the provided name as-is and let Process.Start handle it
+        return executableName;
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
