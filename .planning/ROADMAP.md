@@ -8,6 +8,10 @@
 
 ## Phase 1: Foundation (Week 1)
 **Goal:** Basic infrastructure and command handler
+**Status:** Planned
+**Plans:**
+- [ ] 1-01-PLAN.md — Configuration system with hot-reload and database layer
+- [ ] 1-02-PLAN.md — Repository management and command handler
 
 ### Week 1 Tasks
 
