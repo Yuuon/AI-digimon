@@ -55,16 +55,26 @@ public class ReloadTavernConfigCommand : ICommand
             }
 
             var config = _configService.Config;
+            var sf = config.SpecialFocus;
             var message = $"""
                 ✅ **酒馆配置已重新加载**
 
                 **配置文件**: `{configPath}`
 
-                **当前配置**:
-                • 监测消息数: {config.Monitor.MinMessageCount} 条
+                **监测配置**:
+                • 最小消息数: {config.Monitor.MinMessageCount} 条
                 • 关键词阈值: {config.Monitor.KeywordThreshold} 次
                 • 触发间隔: {config.Monitor.TriggerIntervalMinutes} 分钟
+                • 最大消息记录: {config.Monitor.MaxMessageCount} 条
+
+                **功能开关**:
                 • 自主发言: {(config.AutoSpeak.Enabled ? "✅ 启用" : "❌ 禁用")}
+                • 特别关注: {(sf.Enabled ? "✅ 启用" : "❌ 禁用")}
+                  - 关注用户数: {sf.UserIds.Count}
+                  - 冷却时间: {sf.CooldownMinutes} 分钟
+                  - 要求@Bot: {(sf.RequireMention ? "✅" : "❌")}
+
+                **其他配置**:
                 • 角色目录: `{config.CharacterDirectory}`
                 • 调试日志: {(config.EnableDebugLog ? "✅ 启用" : "❌ 禁用")}
 

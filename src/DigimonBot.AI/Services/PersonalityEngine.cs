@@ -1,5 +1,6 @@
 using System.Text;
 using DigimonBot.Core.Models;
+using DigimonBot.Core.Services;
 
 namespace DigimonBot.AI.Services;
 
@@ -8,14 +9,26 @@ namespace DigimonBot.AI.Services;
 /// </summary>
 public class PersonalityEngine : IPersonalityEngine
 {
+    private readonly IPersonalityConfigService _personalityConfig;
+
+    public PersonalityEngine(IPersonalityConfigService personalityConfig)
+    {
+        _personalityConfig = personalityConfig;
+    }
+
     public string BuildSystemPrompt(DigimonDefinition digimon, UserDigimon userDigimon)
     {
         var sb = new StringBuilder();
         var capabilities = digimon.Stage.GetCapabilities();
+        
+        // 获取性格信息
+        var personalityDef = _personalityConfig.GetPersonality(digimon.Personality);
+        var personalityName = personalityDef?.Name ?? digimon.Personality;
+        var personalityPrompt = personalityDef?.SystemPrompt ?? "";
 
         // 基础身份设定
         sb.AppendLine($"你是{digimon.Name}，一只{digimon.Stage.ToDisplayName()}阶段的数码宝贝。");
-        sb.AppendLine($"你的性格是{digimon.Personality.ToDisplayName()}。");
+        sb.AppendLine($"你的性格是{personalityName}。");
         sb.AppendLine();
 
         // 外观描述
@@ -36,7 +49,14 @@ public class PersonalityEngine : IPersonalityEngine
 
         // 性格特征
         sb.AppendLine("## 性格特征");
-        sb.AppendLine(digimon.Personality.GetPersonalityPrompt());
+        if (!string.IsNullOrEmpty(personalityPrompt))
+        {
+            sb.AppendLine(personalityPrompt);
+        }
+        else
+        {
+            sb.AppendLine($"你的性格是{personalityName}，请在对话中体现这种性格特点。");
+        }
         sb.AppendLine();
 
         // 基础设定
@@ -124,32 +144,20 @@ public class PersonalityEngine : IPersonalityEngine
         return string.Join("、", parts);
     }
 
-    private static string GetStageExample(DigimonStage stage, DigimonPersonality personality)
+    private string GetStageExample(DigimonStage stage, string personality)
     {
-        // 根据阶段和性格返回示例
+        // 获取性格定义
+        var personalityDef = _personalityConfig.GetPersonality(personality);
+        var personalityName = personalityDef?.Name ?? personality;
+        
+        // 根据阶段返回示例
         return stage switch
         {
             DigimonStage.Baby1 => "示例：\"咕噜...（蹭蹭）\"、\"噗呜~\"、\"饿...\"",
-            DigimonStage.Baby2 => personality switch
-            {
-                DigimonPersonality.Brave => "示例：\"我要努力长大！\"、\"冲呀！\"",
-                DigimonPersonality.Friendly => "示例：\"陪我玩嘛~\"、\"我们是朋友！\"",
-                _ => "示例：\"这是什么呀？\"、\"好玩！\""
-            },
-            DigimonStage.Child => personality switch
-            {
-                DigimonPersonality.Brave => "示例：\"交给我吧！\"、\"我会保护你的！\"",
-                DigimonPersonality.Friendly => "示例：\"一起冒险吧！\"、\"谢谢你陪我！\"",
-                DigimonPersonality.Curious => "示例：\"为什么是这样呢？\"、\"教教我嘛！\"",
-                _ => "示例：\"今天天气真好！\"、\"我们去玩吧！\""
-            },
-            DigimonStage.Adult => personality switch
-            {
-                DigimonPersonality.Brave => "示例：\"有我在，不用担心。\"、\"为了正义！\"",
-                DigimonPersonality.Calm => "示例：\"让我分析一下...\"、\"冷静对待。\"",
-                _ => "示例：\"作为成熟的数码宝贝，我会妥善处理。\""
-            },
-            _ => "示例：根据性格和情境自然回答即可。"
+            DigimonStage.Baby2 => $"示例：\"我要努力长大！\"（展现{personalityName}的性格）",
+            DigimonStage.Child => $"示例：\"一起冒险吧！\"（体现{personalityName}的特点）",
+            DigimonStage.Adult => $"示例：作为成熟的数码宝贝，展现{personalityName}的性格处理问题。",
+            _ => $"示例：根据{personalityName}的性格和情境自然回答即可。"
         };
     }
 }
@@ -178,6 +186,15 @@ public static class EnumExtensions
         DigimonPersonality.Calm => "冷静",
         _ => personality.ToString()
     };
+
+    /// <summary>
+    /// 将字符串性格转换为显示名称（通过配置服务）
+    /// </summary>
+    public static string PersonalityToDisplayName(this string personalityKey, IPersonalityConfigService config)
+    {
+        var def = config.GetPersonality(personalityKey);
+        return def?.Name ?? personalityKey;
+    }
 
     public static string ToDisplayName(this EmotionType emotion) => emotion switch
     {

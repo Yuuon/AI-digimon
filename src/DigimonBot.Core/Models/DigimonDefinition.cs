@@ -14,8 +14,8 @@ public class DigimonDefinition
     /// <summary>成长阶段</summary>
     public DigimonStage Stage { get; set; }
     
-    /// <summary>性格类型</summary>
-    public DigimonPersonality Personality { get; set; }
+    /// <summary>性格类型（支持自定义）</summary>
+    public string Personality { get; set; } = "Brave";
     
     /// <summary>基础系统提示词</summary>
     public string BasePrompt { get; set; } = "";

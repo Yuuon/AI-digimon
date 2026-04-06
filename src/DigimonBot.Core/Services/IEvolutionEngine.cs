@@ -9,12 +9,31 @@ namespace DigimonBot.Core.Services;
 public interface IEvolutionEngine
 {
     /// <summary>
-    /// 检查并执行进化
+    /// 检查并执行进化（自动选择最高优先级）
     /// </summary>
     /// <param name="userDigimon">用户数码宝贝实例</param>
     /// <param name="digimonDb">数码宝贝数据库</param>
     /// <returns>进化结果，如果没有进化则返回null</returns>
     Task<EvolutionResult?> CheckAndEvolveAsync(UserDigimon userDigimon, IReadOnlyDictionary<string, DigimonDefinition> digimonDb);
+    
+    /// <summary>
+    /// 获取所有满足条件的可进化选项
+    /// </summary>
+    /// <param name="userDigimon">用户数码宝贝实例</param>
+    /// <param name="currentDef">当前数码宝贝定义</param>
+    /// <param name="digimonDb">数码宝贝数据库</param>
+    /// <returns>可进化选项列表</returns>
+    List<AvailableEvolution> GetAvailableEvolutions(UserDigimon userDigimon, DigimonDefinition currentDef, IReadOnlyDictionary<string, DigimonDefinition> digimonDb);
+    
+    /// <summary>
+    /// 选择并执行特定进化分支
+    /// </summary>
+    /// <param name="userDigimon">用户数码宝贝实例</param>
+    /// <param name="currentDef">当前数码宝贝定义</param>
+    /// <param name="targetId">目标进化ID</param>
+    /// <param name="digimonDb">数码宝贝数据库</param>
+    /// <returns>进化结果，如果失败则返回null</returns>
+    Task<EvolutionResult?> SelectEvolutionAsync(UserDigimon userDigimon, DigimonDefinition currentDef, string targetId, IReadOnlyDictionary<string, DigimonDefinition> digimonDb);
     
     /// <summary>
     /// 获取当前进化进度
@@ -69,4 +88,19 @@ public class PossibleEvolution
     public EmotionValues RequiredEmotions { get; set; } = new();
     public double CurrentMatchPercent { get; set; }
     public int Priority { get; set; }
+}
+
+/// <summary>
+/// 可执行的进化选项（满足所有条件）
+/// </summary>
+public class AvailableEvolution
+{
+    public string TargetId { get; set; } = "";
+    public string TargetName { get; set; } = "";
+    public string Description { get; set; } = "";
+    public int RequiredTokens { get; set; }
+    public EmotionValues RequiredEmotions { get; set; } = new();
+    public double MatchScore { get; set; }
+    public int Priority { get; set; }
+    public bool IsRebirth { get; set; }
 }

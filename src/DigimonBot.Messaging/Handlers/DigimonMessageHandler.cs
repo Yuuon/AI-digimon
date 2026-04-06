@@ -294,7 +294,7 @@ public class DigimonMessageHandler : IMessageHandler
             );
 
             // 检查进化
-            var evolutionResult = await CheckEvolutionAsync(userId, userDigimon);
+            var evolutionResult = await CheckEvolutionAsync(userId, userDigimon, context.GroupId ?? 0);
 
             // 构建回复（添加前缀）
             var response = aiResponse.Content;
@@ -375,22 +375,32 @@ public class DigimonMessageHandler : IMessageHandler
         }
     }
 
-    private async Task<EvolutionResult?> CheckEvolutionAsync(string userId, UserDigimon userDigimon)
+    private async Task<EvolutionResult?> CheckEvolutionAsync(string userId, UserDigimon userDigimon, long groupId = 0)
     {
         var digimonDb = _repository.GetAll();
         var evolutionResult = await _evolutionEngine.CheckAndEvolveAsync(userDigimon, digimonDb);
         
         if (evolutionResult != null && evolutionResult.Success)
         {
-            // 执行进化
+            // 执行进化 - 更新数据库
             await _digimonManager.UpdateDigimonAsync(userId, evolutionResult.NewDigimonId);
             
-            // 如果是重生，重置Token计数
+            // 同时更新内存中的对象，确保一致性
+            userDigimon.CurrentDigimonId = evolutionResult.NewDigimonId;
+            
+            // 如果是重生，重置Token计数和情感值
             if (evolutionResult.IsRebirth)
             {
                 userDigimon.TotalTokensConsumed = 0;
                 userDigimon.Emotions = new EmotionValues();
+                
+                // 保存重置后的状态到数据库
+                await _digimonManager.SaveAsync(userDigimon);
+                _logger.LogInformation("User {UserId} 重生完成，Token和情感值已重置并保存", userId);
             }
+            
+            _logger.LogInformation("User {UserId} 进化完成：{Old} -> {New}，内存对象已更新", 
+                userId, evolutionResult.OldDigimonId, evolutionResult.NewDigimonId);
 
             // 发布进化事件
             _eventPublisher.PublishEvolution(new EvolutionEventArgs
@@ -407,6 +417,36 @@ public class DigimonMessageHandler : IMessageHandler
                 userId, evolutionResult.OldDigimonId, evolutionResult.NewDigimonId);
 
             return evolutionResult;
+        }
+        
+        // 检查是否有多个可进化选项
+        if (!digimonDb.TryGetValue(userDigimon.CurrentDigimonId, out var currentDef))
+        {
+            return null;
+        }
+        
+        var availableEvolutions = _evolutionEngine.GetAvailableEvolutions(userDigimon, currentDef, digimonDb);
+        if (availableEvolutions.Count > 1)
+        {
+            // 多个进化选项可用，发布通知事件
+            _eventPublisher.PublishEvolutionReady(new EvolutionReadyEventArgs
+            {
+                UserId = userId,
+                GroupId = groupId,
+                CurrentDigimonId = userDigimon.CurrentDigimonId,
+                CurrentDigimonName = currentDef.Name,
+                AvailableEvolutions = availableEvolutions.Select(e => new EvolutionOptionInfo
+                {
+                    TargetId = e.TargetId,
+                    TargetName = e.TargetName,
+                    Description = e.Description,
+                    RequiredTokens = e.RequiredTokens,
+                    MatchScore = e.MatchScore
+                }).ToList()
+            });
+            
+            _logger.LogInformation("User {UserId} 的 {Current} 可以进化，检测到 {Count} 个分支，等待用户选择", 
+                userId, currentDef.Name, availableEvolutions.Count);
         }
 
         return null;

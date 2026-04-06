@@ -84,6 +84,61 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                 _logger.LogError(ex, "发送酒馆自主发言消息失败");
             }
         };
+        
+        // 订阅进化就绪事件（多个进化选项可用时通知用户）
+        _eventPublisher.OnEvolutionReady += async (sender, args) =>
+        {
+            try
+            {
+                _logger.LogInformation("收到进化就绪事件: User={UserId}, Current={Current}, Options={Count}", 
+                    args.UserId, args.CurrentDigimonName, args.AvailableEvolutions.Count);
+                
+                var message = BuildEvolutionReadyMessage(args);
+                
+                if (args.GroupId > 0)
+                {
+                    // 群聊消息
+                    await SendGroupMessageAsync(args.GroupId, message);
+                }
+                else
+                {
+                    // 私聊消息
+                    var userId = args.UserId.Split('@')[0]; // 移除可能的 @g{GroupId} 后缀
+                    if (long.TryParse(userId, out var qq))
+                    {
+                        await SendPrivateMessageAsync(qq, message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "发送进化就绪通知失败");
+            }
+        };
+    }
+    
+    /// <summary>
+    /// 构建进化就绪通知消息
+    /// </summary>
+    private string BuildEvolutionReadyMessage(Core.Events.EvolutionReadyEventArgs args)
+    {
+        var options = new List<string>();
+        for (int i = 0; i < args.AvailableEvolutions.Count; i++)
+        {
+            var evo = args.AvailableEvolutions[i];
+            options.Add($"**{i + 1}. {evo.TargetName}** - {evo.Description}");
+        }
+        
+        return $"""
+            🌟 **{args.CurrentDigimonName}** 可以进化了！
+
+            检测到 **{args.AvailableEvolutions.Count}** 个可进化分支：
+
+            {string.Join("\n", options)}
+
+            使用 `/evoselect <序号>` 选择想要进化的分支
+            例如：`/evoselect 1`
+            """;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

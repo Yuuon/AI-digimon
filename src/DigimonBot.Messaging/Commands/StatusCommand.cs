@@ -14,6 +14,7 @@ public class StatusCommand : ICommand
     private readonly IDigimonManager _digimonManager;
     private readonly IDigimonRepository _repository;
     private readonly IEvolutionEngine _evolutionEngine;
+    private readonly IPersonalityConfigService _personalityConfig;
     private readonly List<string> _whitelist;
     private readonly ILogger<StatusCommand> _logger;
 
@@ -21,12 +22,14 @@ public class StatusCommand : ICommand
         IDigimonManager digimonManager, 
         IDigimonRepository repository, 
         IEvolutionEngine evolutionEngine,
+        IPersonalityConfigService personalityConfig,
         AdminConfig adminConfig,
         ILogger<StatusCommand> logger)
     {
         _digimonManager = digimonManager;
         _repository = repository;
         _evolutionEngine = evolutionEngine;
+        _personalityConfig = personalityConfig;
         _whitelist = adminConfig.Whitelist ?? new List<string>();
         _logger = logger;
     }
@@ -88,11 +91,15 @@ public class StatusCommand : ICommand
             ? $"[{context.UserName}]的"
             : "";
 
+        // 获取性格显示名称
+        var personalityDef = _personalityConfig.GetPersonality(definition.Personality);
+        var personalityName = personalityDef?.Name ?? definition.Personality;
+
         var message = $"""
         📊 **{prefix}{displayName}** 的状态
         
         🏷️ 阶段：{definition.Stage.ToDisplayName()}
-        💭 性格：{definition.Personality.ToDisplayName()}
+        💭 性格：{personalityName}
         
         ❤️ 情感属性：
         • 勇气：{digimon.Emotions.Courage}

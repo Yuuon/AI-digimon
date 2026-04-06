@@ -49,6 +49,30 @@ public class TavernAutoSpeakEventArgs : EventArgs
 }
 
 /// <summary>
+/// 进化选项信息
+/// </summary>
+public class EvolutionOptionInfo
+{
+    public string TargetId { get; set; } = "";
+    public string TargetName { get; set; } = "";
+    public string Description { get; set; } = "";
+    public int RequiredTokens { get; set; }
+    public double MatchScore { get; set; }
+}
+
+/// <summary>
+/// 进化就绪事件参数（多个进化选项可用时）
+/// </summary>
+public class EvolutionReadyEventArgs : EventArgs
+{
+    public string UserId { get; set; } = "";
+    public long GroupId { get; set; }
+    public string CurrentDigimonId { get; set; } = "";
+    public string CurrentDigimonName { get; set; } = "";
+    public List<EvolutionOptionInfo> AvailableEvolutions { get; set; } = new();
+}
+
+/// <summary>
 /// 事件发布器接口
 /// </summary>
 public interface IEventPublisher
@@ -57,9 +81,11 @@ public interface IEventPublisher
     event EventHandler<EmotionChangedEventArgs>? OnEmotionChanged;
     event EventHandler<EvolutionApproachingEventArgs>? OnEvolutionApproaching;
     event EventHandler<TavernAutoSpeakEventArgs>? OnTavernAutoSpeak;
+    event EventHandler<EvolutionReadyEventArgs>? OnEvolutionReady;
     
     void PublishEvolution(EvolutionEventArgs args);
     void PublishEmotionChanged(EmotionChangedEventArgs args);
     void PublishEvolutionApproaching(EvolutionApproachingEventArgs args);
     void PublishTavernAutoSpeak(TavernAutoSpeakEventArgs args);
+    void PublishEvolutionReady(EvolutionReadyEventArgs args);
 }

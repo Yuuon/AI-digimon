@@ -1,0 +1,50 @@
+{
+  "Battle": {
+    "AttackPrompt": "你正在战斗！你对{Target}发起了攻击。用一两句话描述你的攻击动作、使用的技能，以及战斗时的气势。要符合你的性格特点，可以喊出必杀技的名字！",
+    "DefensePrompt": "你正在防御{Attacker}的攻击！用一两句话描述你如何躲避或格挡，以及你的反应。",
+    "VictoryPrompt": "战斗胜利了！用一句话描述你获胜后的反应，庆祝胜利的方式。要符合你的性格！",
+    "DefeatPrompt": "战斗失利了...用一句话描述你失败后的反应，但不要气馁，表示会继续努力。",
+    "ToObjectPrompt": "你对{Target}发起了攻击！用一两句描述你的攻击动作，以及击中目标后的效果。",
+    "BattleSystemPrompt": "你是一位战斗旁白叙述者。用一两句描述数码宝贝之间的战斗过程。描述要包含双方使用的招式和结果。根据双方的性格和阶段能力差异，自然地展现战斗的激烈程度。结尾处用一行简短总结战斗结果（谁获胜或平局）。",
+    "BattleUserPromptTemplate": "请描述一场数码宝贝之间的战斗：\n\n攻击方：{AttackerName}（{AttackerStage}）\n性格：{AttackerPersonality}\n形象：{AttackerAppearance}\n当前情感：勇气{AttackerCourage}、友情{AttackerFriendship}、爱心{AttackerLove}、知识{AttackerKnowledge}\n\n被攻击方：{TargetName}（{TargetStage}）\n性格：{TargetPersonality}\n形象：{TargetAppearance}\n当前情感：勇气{TargetCourage}、友情{TargetFriendship}、爱心{TargetLove}、知识{TargetKnowledge}\n\n请用一两句话描述这场战斗：\n1. 战斗的起因（攻击方为什么要攻击）\n2. 战斗的过程（双方使用的招式和策略）\n3. 战斗的高潮（关键时刻）\n4. 战斗的结果（谁获胜，或平局）\n\n在描述中自然地体现双方的情感变化：\n- 主动攻击体现勇气增加\n- 战斗中的互动体现友情变化（合作或竞争）\n- 胜利或失败后的反应体现爱心或知识的变化",
+    "BattleObjectSystemPrompt": "你是一位场景旁白叙述者。用一两句描述数码宝贝与物体互动的过程。根据数码宝贝的性格和阶段，自然地展现其行为的合理性。结尾处用一行简短总结攻击结果和情感影响。",
+    "BattleObjectUserPromptTemplate": "请描述一场数码宝贝攻击物体的场景：\n\n攻击方：{AttackerName}（{AttackerStage}）\n性格：{AttackerPersonality}\n形象：{AttackerAppearance}\n\n攻击目标：{TargetDescription}\n\n请用一两句中文描述这个场景：\n1. {AttackerName}为什么攻击这个目标\n2. 攻击的过程\n3. 攻击的结果（成功破坏、留下痕迹、完全无效等）\n4. 攻击后{AttackerName}的反应和情感变化\n\n在描述中自然地体现情感变化：\n- 主动攻击体现勇气\n- 与物体互动体现好奇心（知识）或玩乐心态（友情）\n- 破坏后的反应体现爱心（如果后悔）或满足（如果成功）"
+  },
+  "CheckIn": {
+    "GreetingTemplates": [
+      "早上好！{UserName}！今天也来看我啦~",
+      "欢迎回来，{UserName}！我等你好久了呢！",
+      "嘿嘿，{UserName}来了！今天有什么好玩的吗？",
+      "{UserName}！见到你真开心！今天天气不错呢~"
+    ],
+    "StreakEncouragement": [
+      "连续{Streak}天啦！真厉害！",
+      "{Streak}天连续打卡！我们的羁绊越来越深了！",
+      "哇！{Streak}天了！{UserName}真有心！"
+    ],
+    "ReceivedGiftResponse": [
+      "哇！收到了{ItemName}！谢谢你！",
+      "{ItemName}！我最喜欢的！{UserName}真了解我~",
+      "嘿嘿，{ItemName}到手啦！谢谢{UserName}！"
+    ]
+  },
+  "Evolution": {
+    "EvolutionAnnouncement": "✨ **进化之光！**\n\n{Name}的身体开始发光...",
+    "RebirthAnnouncement": "🥚 **新的生命开始了！**\n\n{Name}化作光芒，然后...",
+    "PostEvolutionGreeting": "感觉充满了力量！谢谢{UserName}一直以来的陪伴！"
+  },
+  "Idle": {
+    "IdlePrompts": [
+      "（打哈欠）有点困了呢...",
+      "好无聊啊~{UserName}陪我玩嘛~",
+      "（东张西望）那边好像有什么有趣的东西！",
+      "咕噜咕噜...（肚子饿了的声音）"
+    ]
+  },
+  "EmotionResponses": {
+    "HighCourage": "我感觉充满了勇气！什么困难都不怕！",
+    "HighFriendship": "{UserName}，能遇到你真是太好了！",
+    "HighLove": "{UserName}，我会一直陪着你的~",
+    "HighKnowledge": "我又学到了新知识！这个世界真奇妙！"
+  }
+}

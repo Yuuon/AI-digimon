@@ -34,6 +34,8 @@ public class CommandResult
     public bool Success { get; set; }
     public string Message { get; set; } = "";
     public bool IsAiResponseNeeded => false;
+    public bool EvolutionOccurred { get; set; }
+    public string EvolutionMessage { get; set; } = "";
 }
 
 /// <summary>

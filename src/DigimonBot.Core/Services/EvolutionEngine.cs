@@ -16,13 +16,37 @@ public class EvolutionEngine : IEvolutionEngine
         UserDigimon userDigimon, 
         IReadOnlyDictionary<string, DigimonDefinition> digimonDb)
     {
+        // 获取所有可进化选项
         if (!digimonDb.TryGetValue(userDigimon.CurrentDigimonId, out var currentDef))
         {
             return Task.FromResult<EvolutionResult?>(null);
         }
 
-        // 检查是否满足任何进化条件
-        var possibleEvolutions = new List<(EvolutionOption Option, double MatchScore)>();
+        var availableEvolutions = GetAvailableEvolutions(userDigimon, currentDef, digimonDb);
+
+        // 如果没有可进化选项，返回null
+        if (availableEvolutions.Count == 0)
+        {
+            return Task.FromResult<EvolutionResult?>(null);
+        }
+
+        // 如果只有一个可进化选项，自动选择
+        if (availableEvolutions.Count == 1)
+        {
+            return ExecuteEvolutionAsync(userDigimon, currentDef, availableEvolutions[0].TargetId, digimonDb);
+        }
+
+        // 多个可进化选项，不自动选择，返回null（等待用户手动选择）
+        return Task.FromResult<EvolutionResult?>(null);
+    }
+
+    /// <summary>
+    /// 获取所有满足条件的可进化选项
+    /// </summary>
+    public List<AvailableEvolution> GetAvailableEvolutions(UserDigimon userDigimon, DigimonDefinition currentDef, IReadOnlyDictionary<string, DigimonDefinition> digimonDb)
+    {
+        var result = new List<AvailableEvolution>();
+        bool isRebirth = currentDef.Stage.IsFinalForm();
 
         foreach (var evoOption in currentDef.NextEvolutions)
         {
@@ -34,31 +58,71 @@ public class EvolutionEngine : IEvolutionEngine
             if (!userDigimon.Emotions.MeetsRequirements(evoOption.Requirements))
                 continue;
 
+            // 获取目标定义
+            var targetId = isRebirth ? GetDefaultEggId(digimonDb) : evoOption.TargetId;
+            if (!digimonDb.TryGetValue(targetId, out var targetDef))
+                continue;
+
             // 计算匹配度
             var matchScore = userDigimon.Emotions.CalculateMatchScore(evoOption.Requirements);
-            possibleEvolutions.Add((evoOption, matchScore));
+
+            result.Add(new AvailableEvolution
+            {
+                TargetId = targetId,
+                TargetName = targetDef.Name,
+                Description = evoOption.Description,
+                RequiredTokens = evoOption.MinTokens,
+                RequiredEmotions = evoOption.Requirements,
+                MatchScore = matchScore,
+                Priority = evoOption.Priority,
+                IsRebirth = isRebirth
+            });
         }
 
-        if (possibleEvolutions.Count == 0)
+        // 按优先级排序：复杂度 > 优先级字段 > 匹配度
+        return result
+            .OrderByDescending(e => digimonDb.TryGetValue(e.TargetId, out var def) ? def.NextEvolutions.Count : 0)
+            .ThenByDescending(e => e.Priority)
+            .ThenByDescending(e => e.MatchScore)
+            .ToList();
+    }
+
+    /// <summary>
+    /// 选择并执行特定进化分支
+    /// </summary>
+    public Task<EvolutionResult?> SelectEvolutionAsync(UserDigimon userDigimon, DigimonDefinition currentDef, string targetId, IReadOnlyDictionary<string, DigimonDefinition> digimonDb)
+    {
+        // 验证是否满足进化条件
+        var availableEvolutions = GetAvailableEvolutions(userDigimon, currentDef, digimonDb);
+        var selectedEvo = availableEvolutions.FirstOrDefault(e => e.TargetId.Equals(targetId, StringComparison.OrdinalIgnoreCase));
+
+        if (selectedEvo == null)
         {
+            // 检查是否是重生的特殊情况
+            if (currentDef.Stage.IsFinalForm())
+            {
+                var eggId = GetDefaultEggId(digimonDb);
+                if (targetId.Equals(eggId, StringComparison.OrdinalIgnoreCase) && availableEvolutions.Count > 0)
+                {
+                    return ExecuteEvolutionAsync(userDigimon, currentDef, eggId, digimonDb);
+                }
+            }
             return Task.FromResult<EvolutionResult?>(null);
         }
 
-        // 按优先级排序：复杂度（多样性）> 优先级字段 > 匹配度
-        var bestEvolution = possibleEvolutions
-            .OrderByDescending(e => e.Option.CalculateComplexity())
-            .ThenByDescending(e => e.Option.Priority)
-            .ThenByDescending(e => e.MatchScore)
-            .First();
+        return ExecuteEvolutionAsync(userDigimon, currentDef, targetId, digimonDb);
+    }
 
-        var targetId = bestEvolution.Option.TargetId;
-        
-        // 检查是否是最终形态后的重生
+    /// <summary>
+    /// 执行进化
+    /// </summary>
+    private Task<EvolutionResult?> ExecuteEvolutionAsync(UserDigimon userDigimon, DigimonDefinition currentDef, string targetId, IReadOnlyDictionary<string, DigimonDefinition> digimonDb)
+    {
         bool isRebirth = currentDef.Stage.IsFinalForm();
         
+        // 如果是重生，强制使用蛋的ID
         if (isRebirth)
         {
-            // 最终形态进化后回到蛋
             targetId = GetDefaultEggId(digimonDb);
         }
 
@@ -66,6 +130,9 @@ public class EvolutionEngine : IEvolutionEngine
         {
             return Task.FromResult<EvolutionResult?>(null);
         }
+
+        // 找到对应的进化选项以获取描述
+        var evoOption = currentDef.NextEvolutions.FirstOrDefault(e => e.TargetId == targetId || isRebirth);
 
         var result = new EvolutionResult
         {
@@ -76,7 +143,7 @@ public class EvolutionEngine : IEvolutionEngine
             IsRebirth = isRebirth,
             Message = isRebirth 
                 ? $"{currentDef.Name}完成了它的使命，化作光芒回归数码世界...一颗新的数码蛋诞生了！"
-                : $"恭喜！{currentDef.Name}进化成了{newDef.Name}！{bestEvolution.Option.Description}"
+                : $"恭喜！{currentDef.Name}进化成了{newDef.Name}！{evoOption?.Description ?? "获得了新的力量！"}"
         };
 
         return Task.FromResult<EvolutionResult?>(result);

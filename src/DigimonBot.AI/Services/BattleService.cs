@@ -11,16 +11,22 @@ namespace DigimonBot.AI.Services;
 public class BattleService : IBattleService
 {
     private readonly IAIClient _aiClient;
+    private readonly IPersonalityConfigService _personalityConfig;
+    private readonly IDialogueConfigService _dialogueConfig;
     private readonly ILogger<BattleService> _logger;
     private readonly ConcurrentDictionary<string, DateTime> _protectionMap = new();
     private readonly int _protectionSeconds;
 
     public BattleService(
         IAIClient aiClient,
+        IPersonalityConfigService personalityConfig,
+        IDialogueConfigService dialogueConfig,
         ILogger<BattleService> logger,
         int protectionSeconds = 300) // 默认5分钟
     {
         _aiClient = aiClient;
+        _personalityConfig = personalityConfig;
+        _dialogueConfig = dialogueConfig;
         _logger = logger;
         _protectionSeconds = protectionSeconds;
     }
@@ -33,14 +39,19 @@ public class BattleService : IBattleService
     {
         try
         {
-            // 构建战斗场景提示词
-            var prompt = BuildBattlePrompt(attackerDef, targetDef, attacker, target);
+            // 获取配置
+            var battleConfig = _dialogueConfig.Config.Battle;
             
-            // 调用AI生成战斗旁白
-            var systemPrompt = "你是一位战斗旁白叙述者。用生动的中文描述数码宝贝之间的战斗过程。" +
-                             "描述要包含战斗的起因、过程、高潮和结果。" +
-                             "根据双方的性格和阶段差异，自然地展现战斗的激烈程度。" +
-                             "结尾处用一行简短总结战斗结果（谁获胜或平局）。";
+            // 构建战斗场景提示词
+            var prompt = BuildBattlePrompt(attackerDef, targetDef, attacker, target, battleConfig.BattleUserPromptTemplate);
+            
+            // 使用配置中的系统提示词
+            var systemPrompt = string.IsNullOrWhiteSpace(battleConfig.BattleSystemPrompt)
+                ? "你是一位战斗旁白叙述者。用生动的中文描述数码宝贝之间的战斗过程。" +
+                  "描述要包含战斗的起因、过程、高潮和结果。" +
+                  "根据双方的性格和阶段差异，自然地展现战斗的激烈程度。" +
+                  "结尾处用一行简短总结战斗结果（谁获胜或平局）。"
+                : battleConfig.BattleSystemPrompt;
 
             var messages = new List<ChatMessage>
             {
@@ -81,31 +92,53 @@ public class BattleService : IBattleService
     {
         try
         {
-            // 构建攻击物体的提示词
-            var prompt = $"""
-                请描述一场数码宝贝攻击物体的场景：
-                
-                攻击方：{attackerDef.Name}（{attackerDef.Stage.ToDisplayName()}）
-                性格：{attackerDef.Personality.ToDisplayName()}
-                形象：{attackerDef.Appearance}
-                
-                攻击目标：{targetDescription}
-                
-                请用生动的中文描述这个场景：
-                1. {attackerDef.Name}为什么攻击这个目标
-                2. 攻击的过程
-                3. 攻击的结果（成功破坏、留下痕迹、完全无效等）
-                4. 攻击后{attackerDef.Name}的反应和情感变化
-                
-                在描述中自然地体现情感变化：
-                - 主动攻击体现勇气
-                - 与物体互动体现好奇心（知识）或玩乐心态（友情）
-                - 破坏后的反应体现爱心（如果后悔）或满足（如果成功）
-                """;
+            // 获取配置
+            var battleConfig = _dialogueConfig.Config.Battle;
+            
+            // 获取性格显示名称
+            var personalityDef = _personalityConfig.GetPersonality(attackerDef.Personality);
+            var personalityName = personalityDef?.Name ?? attackerDef.Personality;
+            
+            // 构建攻击物体的提示词（使用配置模板或默认模板）
+            string prompt;
+            if (!string.IsNullOrWhiteSpace(battleConfig.BattleObjectUserPromptTemplate))
+            {
+                prompt = battleConfig.BattleObjectUserPromptTemplate
+                    .Replace("{AttackerName}", attackerDef.Name)
+                    .Replace("{AttackerStage}", attackerDef.Stage.ToDisplayName())
+                    .Replace("{AttackerPersonality}", personalityName)
+                    .Replace("{AttackerAppearance}", attackerDef.Appearance)
+                    .Replace("{TargetDescription}", targetDescription);
+            }
+            else
+            {
+                prompt = $"""
+                    请描述一场数码宝贝攻击物体的场景：
+                    
+                    攻击方：{attackerDef.Name}（{attackerDef.Stage.ToDisplayName()}）
+                    性格：{personalityName}
+                    形象：{attackerDef.Appearance}
+                    
+                    攻击目标：{targetDescription}
+                    
+                    请用生动的中文描述这个场景：
+                    1. {attackerDef.Name}为什么攻击这个目标
+                    2. 攻击的过程
+                    3. 攻击的结果（成功破坏、留下痕迹、完全无效等）
+                    4. 攻击后{attackerDef.Name}的反应和情感变化
+                    
+                    在描述中自然地体现情感变化：
+                    - 主动攻击体现勇气
+                    - 与物体互动体现好奇心（知识）或玩乐心态（友情）
+                    - 破坏后的反应体现爱心（如果后悔）或满足（如果成功）
+                    """;
+            }
 
-            var systemPrompt = "你是一位场景旁白叙述者。用生动的中文描述数码宝贝与物体互动的过程。" +
-                             "根据数码宝贝的性格和阶段，自然地展现其行为的合理性。" +
-                             "结尾处用一行简短总结攻击结果和情感影响。";
+            var systemPrompt = string.IsNullOrWhiteSpace(battleConfig.BattleObjectSystemPrompt)
+                ? "你是一位场景旁白叙述者。用生动的中文描述数码宝贝与物体互动的过程。" +
+                  "根据数码宝贝的性格和阶段，自然地展现其行为的合理性。" +
+                  "结尾处用一行简短总结攻击结果和情感影响。"
+                : battleConfig.BattleObjectSystemPrompt;
 
             var messages = new List<ChatMessage>
             {
@@ -170,18 +203,46 @@ public class BattleService : IBattleService
         DigimonDefinition attackerDef, 
         DigimonDefinition targetDef,
         UserDigimonState attacker,
-        UserDigimonState target)
+        UserDigimonState target,
+        string? template = null)
     {
+        // 获取性格显示名称
+        var attackerPersonality = _personalityConfig.GetPersonality(attackerDef.Personality)?.Name ?? attackerDef.Personality;
+        var targetPersonality = _personalityConfig.GetPersonality(targetDef.Personality)?.Name ?? targetDef.Personality;
+        
+        // 如果提供了模板，使用模板替换
+        if (!string.IsNullOrWhiteSpace(template))
+        {
+            return template
+                .Replace("{AttackerName}", attackerDef.Name)
+                .Replace("{AttackerStage}", attackerDef.Stage.ToDisplayName())
+                .Replace("{AttackerPersonality}", attackerPersonality)
+                .Replace("{AttackerAppearance}", attackerDef.Appearance)
+                .Replace("{AttackerCourage}", attacker.Courage.ToString())
+                .Replace("{AttackerFriendship}", attacker.Friendship.ToString())
+                .Replace("{AttackerLove}", attacker.Love.ToString())
+                .Replace("{AttackerKnowledge}", attacker.Knowledge.ToString())
+                .Replace("{TargetName}", targetDef.Name)
+                .Replace("{TargetStage}", targetDef.Stage.ToDisplayName())
+                .Replace("{TargetPersonality}", targetPersonality)
+                .Replace("{TargetAppearance}", targetDef.Appearance)
+                .Replace("{TargetCourage}", target.Courage.ToString())
+                .Replace("{TargetFriendship}", target.Friendship.ToString())
+                .Replace("{TargetLove}", target.Love.ToString())
+                .Replace("{TargetKnowledge}", target.Knowledge.ToString());
+        }
+        
+        // 默认模板
         return $"""
             请描述一场数码宝贝之间的战斗：
             
             攻击方：{attackerDef.Name}（{attackerDef.Stage.ToDisplayName()}）
-            性格：{attackerDef.Personality.ToDisplayName()}
+            性格：{attackerPersonality}
             形象：{attackerDef.Appearance}
             当前情感：勇气{attacker.Courage}、友情{attacker.Friendship}、爱心{attacker.Love}、知识{attacker.Knowledge}
             
             被攻击方：{targetDef.Name}（{targetDef.Stage.ToDisplayName()}）
-            性格：{targetDef.Personality.ToDisplayName()}
+            性格：{targetPersonality}
             形象：{targetDef.Appearance}
             当前情感：勇气{target.Courage}、友情{target.Friendship}、爱心{target.Love}、知识{target.Knowledge}
             

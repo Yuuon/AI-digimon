@@ -116,6 +116,20 @@ public class Program
                 // 注册消息历史服务
                 services.AddSingleton<IMessageHistoryService, MessageHistoryService>();
                 
+                // 注册性格配置服务
+                services.AddSingleton<IPersonalityConfigService>(provider => 
+                {
+                    var logger = provider.GetRequiredService<ILogger<PersonalityConfigService>>();
+                    return new PersonalityConfigService(logger, "Data/digimon_personalities.json");
+                });
+                
+                // 注册对话配置服务
+                services.AddSingleton<IDialogueConfigService>(provider => 
+                {
+                    var logger = provider.GetRequiredService<ILogger<DialogueConfigService>>();
+                    return new DialogueConfigService(logger, "Data/digimon_dialogue_config.json");
+                });
+                
                 // 注册酒馆配置服务（需要先于其他酒馆服务注册）
                 services.AddSingleton<ITavernConfigService>(provider => 
                 {
@@ -148,9 +162,13 @@ public class Program
                 services.AddSingleton<IBattleService>(provider =>
                 {
                     var aiClient = provider.GetRequiredService<IAIClient>();
+                    var personalityConfig = provider.GetRequiredService<IPersonalityConfigService>();
+                    var dialogueConfig = provider.GetRequiredService<IDialogueConfigService>();
                     var logger = provider.GetRequiredService<ILogger<BattleService>>();
                     return new BattleService(
                         aiClient, 
+                        personalityConfig,
+                        dialogueConfig,
                         logger, 
                         settings.Data.BattleProtectionSeconds);
                 });
@@ -170,6 +188,7 @@ public class Program
                         digimonManager, 
                         repository, 
                         evolutionEngine,
+                        provider.GetRequiredService<IPersonalityConfigService>(),
                         settings.Admin,
                         provider.GetRequiredService<ILogger<StatusCommand>>()));
                     registry.Register(new EvolutionPathCommand(
@@ -272,6 +291,33 @@ public class Program
                         provider.GetRequiredService<ITavernConfigService>(),
                         adminConfig,
                         provider.GetRequiredService<ILogger<SpecialFocusCommand>>()));
+                    
+                    // 添加重载性格配置指令
+                    registry.Register(new ReloadPersonalityConfigCommand(
+                        provider.GetRequiredService<IPersonalityConfigService>(),
+                        adminConfig,
+                        provider.GetRequiredService<ILogger<ReloadPersonalityConfigCommand>>()));
+                    
+                    // 添加重载对话配置指令
+                    registry.Register(new ReloadDialogueConfigCommand(
+                        provider.GetRequiredService<IDialogueConfigService>(),
+                        adminConfig,
+                        provider.GetRequiredService<ILogger<ReloadDialogueConfigCommand>>()));
+                    
+                    // 添加进化相关指令
+                    registry.Register(new EvolutionListCommand(
+                        digimonManager,
+                        repository,
+                        evolutionEngine,
+                        provider.GetRequiredService<ILogger<EvolutionListCommand>>()));
+                    
+                    registry.Register(new EvolutionSelectCommand(
+                        digimonManager,
+                        repository,
+                        evolutionEngine,
+                        provider.GetRequiredService<Core.Events.IEventPublisher>(),
+                        provider.GetRequiredService<IPersonalityEngine>(),
+                        provider.GetRequiredService<ILogger<EvolutionSelectCommand>>()));
 
                     return registry;
                 });
