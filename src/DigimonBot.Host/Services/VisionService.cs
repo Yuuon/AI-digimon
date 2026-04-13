@@ -169,12 +169,21 @@ public class VisionService : IVisionService
             var psi = new ProcessStartInfo
             {
                 FileName = "curl",
-                Arguments = $"-s --max-time {_imageConfig.UploadTimeoutSeconds} -F \"reqtype=fileupload\" -F \"time=24h\" -F \"fileToUpload=@{filePath}\" {_imageConfig.ImageBedUrl}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-s");
+            psi.ArgumentList.Add("--max-time");
+            psi.ArgumentList.Add(_imageConfig.UploadTimeoutSeconds.ToString());
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add("reqtype=fileupload");
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add("time=24h");
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add($"fileToUpload=@{filePath}");
+            psi.ArgumentList.Add(_imageConfig.ImageBedUrl);
 
             using var process = Process.Start(psi);
             if (process == null) return null;
