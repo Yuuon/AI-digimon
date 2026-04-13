@@ -378,7 +378,8 @@ public class Program
                         provider.GetRequiredService<IKimiRepositoryRepository>(),
                         provider.GetRequiredService<ILogger<KimiRepositoryManager>>(),
                         kimiConfig.CurrentConfig.Execution.BasePath,
-                        kimiConfig.CurrentConfig.Git.DefaultBranch);
+                        kimiConfig.CurrentConfig.Git.DefaultBranch,
+                        kimiConfig.CurrentConfig.Execution.GitCommandTimeoutMs);
                 });
 
                 // 注册 Kimi ACP 服务客户端（JSON-RPC over stdio 方式）
@@ -389,7 +390,8 @@ public class Program
                     {
                         KimiExecutablePath = kimiConfig.CurrentConfig.Execution.KimiCliPath,
                         DefaultWorkDir = kimiConfig.CurrentConfig.Execution.BasePath,
-                        TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds
+                        TimeoutSeconds = kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds,
+                        ProcessKillTimeoutMs = kimiConfig.CurrentConfig.Execution.ProcessKillTimeoutMs
                     };
                     return new DigimonBot.AI.Services.KimiServiceClient(
                         options,

@@ -19,6 +19,42 @@ public class AppSettings
     
     /// <summary>管理员配置（白名单等）</summary>
     public AdminConfig Admin { get; set; } = new();
+
+    /// <summary>图片处理配置</summary>
+    public ImageProcessingConfig ImageProcessing { get; set; } = new();
+}
+
+/// <summary>
+/// 图片处理配置
+/// </summary>
+public class ImageProcessingConfig
+{
+    /// <summary>识图服务最大图片尺寸（像素）</summary>
+    public int VisionMaxDimension { get; set; } = 1024;
+
+    /// <summary>图片上传服务最大图片尺寸（像素）</summary>
+    public int UploadMaxDimension { get; set; } = 768;
+
+    /// <summary>Base64回退的最大文件大小（字节）</summary>
+    public int MaxBase64SizeBytes { get; set; } = 200_000;
+
+    /// <summary>图片下载超时（秒）</summary>
+    public int DownloadTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>图片上传超时（秒）</summary>
+    public int UploadTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>JPEG压缩质量（用于识图直接保存）</summary>
+    public int JpegQuality { get; set; } = 85;
+
+    /// <summary>JPEG压缩最低质量（二分搜索下限）</summary>
+    public int MinCompressionQuality { get; set; } = 10;
+
+    /// <summary>JPEG压缩最高质量（二分搜索上限）</summary>
+    public int MaxCompressionQuality { get; set; } = 85;
+
+    /// <summary>图床上传URL</summary>
+    public string ImageBedUrl { get; set; } = "https://litterbox.catbox.moe/resources/internals/api.php";
 }
 
 public class QQBotConfig

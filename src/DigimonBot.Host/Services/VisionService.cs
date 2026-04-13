@@ -18,6 +18,7 @@ public class VisionService : IVisionService
 {
     private readonly HttpClient _httpClient;
     private readonly AIConfig _aiConfig;
+    private readonly ImageProcessingConfig _imageConfig;
     private readonly ILogger<VisionService> _logger;
 
     public VisionService(
@@ -27,6 +28,7 @@ public class VisionService : IVisionService
     {
         _httpClient = httpClient;
         _aiConfig = settings.Value.AI;
+        _imageConfig = settings.Value.ImageProcessing;
         _logger = logger;
     }
 
@@ -72,7 +74,7 @@ public class VisionService : IVisionService
                 if (string.IsNullOrEmpty(publicUrl))
                 {
                     // 如果上传失败且图片较小，使用 base64
-                    if (compressedSize < 200_000)
+                    if (compressedSize < _imageConfig.MaxBase64SizeBytes)
                     {
                         _logger.LogWarning("[VisionService] 图床上传失败，尝试base64方式");
                         return await AnalyzeWithBase64Async(compressedPath, prompt, apiKey, visionConfig);
@@ -117,7 +119,7 @@ public class VisionService : IVisionService
         try
         {
             using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromSeconds(30);
+            httpClient.Timeout = TimeSpan.FromSeconds(_imageConfig.DownloadTimeoutSeconds);
             
             var imageBytes = await httpClient.GetByteArrayAsync(imageUrl);
             var originalSize = imageBytes.Length;
@@ -127,8 +129,8 @@ public class VisionService : IVisionService
             using var inputStream = new MemoryStream(imageBytes);
             using var image = await Image.LoadAsync(inputStream);
 
-            // 最大尺寸 1024x1024
-            var maxSize = 1024;
+            // 最大尺寸
+            var maxSize = _imageConfig.VisionMaxDimension;
             if (image.Width > maxSize || image.Height > maxSize)
             {
                 var ratio = Math.Min((double)maxSize / image.Width, (double)maxSize / image.Height);
@@ -136,7 +138,7 @@ public class VisionService : IVisionService
             }
 
             var tempPath = Path.Combine(Path.GetTempPath(), $"vision_{Guid.NewGuid():N}.jpg");
-            await image.SaveAsync(tempPath, new JpegEncoder { Quality = 85 });
+            await image.SaveAsync(tempPath, new JpegEncoder { Quality = _imageConfig.JpegQuality });
             
             var compressedSize = (int)new FileInfo(tempPath).Length;
             
@@ -167,12 +169,21 @@ public class VisionService : IVisionService
             var psi = new ProcessStartInfo
             {
                 FileName = "curl",
-                Arguments = $"-s --max-time 60 -F \"reqtype=fileupload\" -F \"time=24h\" -F \"fileToUpload=@{filePath}\" https://litterbox.catbox.moe/resources/internals/api.php",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-s");
+            psi.ArgumentList.Add("--max-time");
+            psi.ArgumentList.Add(_imageConfig.UploadTimeoutSeconds.ToString());
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add("reqtype=fileupload");
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add("time=24h");
+            psi.ArgumentList.Add("-F");
+            psi.ArgumentList.Add($"fileToUpload=@{filePath}");
+            psi.ArgumentList.Add(_imageConfig.ImageBedUrl);
 
             using var process = Process.Start(psi);
             if (process == null) return null;

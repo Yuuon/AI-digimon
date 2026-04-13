@@ -28,6 +28,7 @@ public class KimiAcpClient : IDisposable
     private int _nextId = 1;
     private bool _isInitialized = false;
     private readonly object _lock = new();
+    private readonly int _processKillTimeoutMs;
 
     // 事件：会话更新通知（流式输出）
     public event EventHandler<SessionUpdateEventArgs>? OnSessionUpdate;
@@ -42,11 +43,12 @@ public class KimiAcpClient : IDisposable
     /// </summary>
     public bool AutoApproveTools { get; set; } = true;
 
-    public KimiAcpClient(ILogger? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true)
+    public KimiAcpClient(ILogger? logger = null, string? kimiExecutablePath = null, bool autoApproveTools = true, int processKillTimeoutMs = 5000)
     {
         _logger = logger;
         _kimiExecutablePath = ResolveKimiExecutablePath(kimiExecutablePath);
         AutoApproveTools = autoApproveTools;
+        _processKillTimeoutMs = processKillTimeoutMs;
     }
 
     #region 连接管理
@@ -115,7 +117,7 @@ public class KimiAcpClient : IDisposable
             try
             {
                 _process.Kill(entireProcessTree: true);
-                _process.WaitForExit(5000);
+                _process.WaitForExit(_processKillTimeoutMs);
             }
             catch { }
         }

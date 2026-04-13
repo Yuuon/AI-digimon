@@ -168,7 +168,14 @@ public class EvolutionEngine : IEvolutionEngine
         var closestEvo = currentDef.NextEvolutions
             .OrderBy(e => Math.Max(0, e.MinTokens - userDigimon.TotalTokensConsumed))
             .ThenByDescending(e => userDigimon.Emotions.CalculateMatchScore(e.Requirements))
-            .First();
+            .FirstOrDefault();
+
+        if (closestEvo == null)
+        {
+            progress.RequiredTokens = int.MaxValue;
+            progress.EmotionProgressPercent = 0;
+            return progress;
+        }
 
         progress.RequiredTokens = closestEvo.MinTokens;
         progress.RequiredEmotions = closestEvo.Requirements;

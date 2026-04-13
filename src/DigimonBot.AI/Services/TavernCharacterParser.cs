@@ -302,6 +302,9 @@ public class TavernCharacterParser : ITavernCharacterParser
 
     private string? GetStringProperty(JsonElement element, string propertyName)
     {
+        if (string.IsNullOrEmpty(propertyName))
+            return null;
+
         if (element.TryGetProperty(propertyName, out var property))
         {
             return property.GetString();
