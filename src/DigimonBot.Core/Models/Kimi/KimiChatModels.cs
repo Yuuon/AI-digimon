@@ -77,19 +77,9 @@ public class KimiSessionInfo
 public class KimiServiceOptions
 {
     /// <summary>
-    /// 服务基础 URL，默认 http://127.0.0.1:5494
-    /// </summary>
-    public string BaseUrl { get; set; } = "http://127.0.0.1:5494";
-
-    /// <summary>
     /// 请求超时时间（秒），默认 5 分钟
     /// </summary>
     public int TimeoutSeconds { get; set; } = 300;
-
-    /// <summary>
-    /// 是否自动管理 kimi web 服务进程
-    /// </summary>
-    public bool AutoManageProcess { get; set; } = false;
 
     /// <summary>
     /// Kimi CLI 可执行文件路径
@@ -102,9 +92,9 @@ public class KimiServiceOptions
     public string? DefaultWorkDir { get; set; }
 
     /// <summary>
-    /// kimi web 服务端口
+    /// ACP 进程终止等待超时（毫秒）
     /// </summary>
-    public int Port { get; set; } = 5494;
+    public int ProcessKillTimeoutMs { get; set; } = 5000;
 }
 
 /// <summary>

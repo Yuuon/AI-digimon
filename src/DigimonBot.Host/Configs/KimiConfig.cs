@@ -88,6 +88,16 @@ public class ExecutionConfig
     /// 是否自动管理 kimi web 服务进程生命周期
     /// </summary>
     public bool AutoManageKimiWeb { get; set; } = false;
+
+    /// <summary>
+    /// Git 命令超时时间（毫秒）
+    /// </summary>
+    public int GitCommandTimeoutMs { get; set; } = 30000;
+
+    /// <summary>
+    /// ACP 进程终止等待超时（毫秒）
+    /// </summary>
+    public int ProcessKillTimeoutMs { get; set; } = 5000;
 }
 
 /// <summary>

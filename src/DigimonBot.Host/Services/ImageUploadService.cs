@@ -1,5 +1,7 @@
 using DigimonBot.Core.Services;
+using DigimonBot.Host.Configs;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Processing;
@@ -13,10 +15,14 @@ namespace DigimonBot.Host.Services;
 public class ImageUploadService : IImageUploadService
 {
     private readonly ILogger<ImageUploadService> _logger;
+    private readonly ImageProcessingConfig _imageConfig;
 
-    public ImageUploadService(ILogger<ImageUploadService> logger)
+    public ImageUploadService(
+        ILogger<ImageUploadService> logger,
+        IOptions<AppSettings> settings)
     {
         _logger = logger;
+        _imageConfig = settings.Value.ImageProcessing;
     }
 
     /// <summary>
@@ -38,8 +44,8 @@ public class ImageUploadService : IImageUploadService
 
             _logger.LogInformation("[ImageUpload] 原始图片大小: {Size} bytes", imageBytes.Length);
 
-            // 2. 压缩图片（目标：小于 200KB）
-            var compressedBytes = await CompressImageAsync(imageBytes, maxSizeInBytes: 200_000);
+            // 2. 压缩图片（目标：小于配置的最大大小）
+            var compressedBytes = await CompressImageAsync(imageBytes, maxSizeInBytes: _imageConfig.MaxBase64SizeBytes);
             
             if (compressedBytes == null || compressedBytes.Length == 0)
             {
@@ -73,7 +79,7 @@ public class ImageUploadService : IImageUploadService
         try
         {
             using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromSeconds(30);
+            httpClient.Timeout = TimeSpan.FromSeconds(_imageConfig.DownloadTimeoutSeconds);
             
             var response = await httpClient.GetAsync(imageUrl);
             if (!response.IsSuccessStatusCode)
@@ -107,8 +113,8 @@ public class ImageUploadService : IImageUploadService
             using var inputStream = new MemoryStream(imageBytes);
             using var image = await Image.LoadAsync(inputStream);
 
-            // 计算目标尺寸（最大 768x768）
-            var maxDimension = 768;
+            // 计算目标尺寸
+            var maxDimension = _imageConfig.UploadMaxDimension;
             if (image.Width > maxDimension || image.Height > maxDimension)
             {
                 var ratio = Math.Min((double)maxDimension / image.Width, (double)maxDimension / image.Height);
@@ -121,8 +127,8 @@ public class ImageUploadService : IImageUploadService
 
             // 使用二分法找到合适的压缩质量
             byte[]? result = null;
-            var minQuality = 10;
-            var maxQuality = 85;
+            var minQuality = _imageConfig.MinCompressionQuality;
+            var maxQuality = _imageConfig.MaxCompressionQuality;
             
             while (minQuality <= maxQuality)
             {
@@ -154,12 +160,12 @@ public class ImageUploadService : IImageUploadService
                 return result;
             }
 
-            // 如果即使质量10%还是太大，返回质量10%的结果
+            // 如果即使最低质量还是太大，返回最低质量的结果
             using var finalStream = new MemoryStream();
-            var finalEncoder = new JpegEncoder { Quality = 10 };
+            var finalEncoder = new JpegEncoder { Quality = _imageConfig.MinCompressionQuality };
             await image.SaveAsync(finalStream, finalEncoder);
             
-            _logger.LogWarning("[ImageUpload] 即使10%质量仍超过限制: {Size} bytes", finalStream.Length);
+            _logger.LogWarning("[ImageUpload] 即使{Quality}%质量仍超过限制: {Size} bytes", _imageConfig.MinCompressionQuality, finalStream.Length);
             return finalStream.ToArray();
         }
         catch (Exception ex)

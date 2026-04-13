@@ -15,18 +15,21 @@ public class KimiRepositoryManager : IKimiRepositoryManager
     private readonly ILogger<KimiRepositoryManager> _logger;
     private readonly string _basePath;
     private readonly string _defaultBranch;
+    private readonly int _gitCommandTimeoutMs;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     public KimiRepositoryManager(
         IKimiRepositoryRepository repository,
         ILogger<KimiRepositoryManager> logger,
         string basePath = "./kimi-workspace",
-        string defaultBranch = "main")
+        string defaultBranch = "main",
+        int gitCommandTimeoutMs = 30000)
     {
         _repository = repository;
         _logger = logger;
         _basePath = basePath;
         _defaultBranch = defaultBranch;
+        _gitCommandTimeoutMs = gitCommandTimeoutMs;
 
         // 确保基础目录存在
         if (!Directory.Exists(_basePath))
@@ -174,7 +177,7 @@ public class KimiRepositoryManager : IKimiRepositoryManager
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
 
-        var completed = process.WaitForExit(30000); // 30秒超时
+        var completed = process.WaitForExit(_gitCommandTimeoutMs);
         if (!completed)
         {
             process.Kill();

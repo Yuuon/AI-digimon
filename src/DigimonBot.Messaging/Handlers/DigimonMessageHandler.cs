@@ -157,6 +157,10 @@ public class DigimonMessageHandler : IMessageHandler
         
         // 解析命令和参数
         var parts = content.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            return new MessageResult { Handled = false };
+        }
         var commandName = parts[0];
         var args = parts.Length > 1 ? parts[1..] : Array.Empty<string>();
 

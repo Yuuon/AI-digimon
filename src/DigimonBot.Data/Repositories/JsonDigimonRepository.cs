@@ -74,8 +74,9 @@ public class JsonDigimonRepository : IDigimonRepository
             var baby1 = _digimons.Values.FirstOrDefault(d => d.Stage == DigimonStage.Baby1);
             if (baby1 != null) return baby1;
             
-            // 否则返回第一个
-            return _digimons.Values.First();
+            // 否则返回第一个（如果存在）
+            return _digimons.Values.FirstOrDefault()
+                ?? throw new InvalidOperationException("No Digimon definitions loaded. Please check the database file.");
         }
     }
 
