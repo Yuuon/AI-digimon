@@ -162,7 +162,7 @@ public class KimiServiceClient : IKimiServiceClient
                     messageBuilder.Append(e.Content);
                     chunkCount++;
                     var preview = e.Content.Length > StreamChunkPreviewLength ? e.Content[..StreamChunkPreviewLength] + "..." : e.Content;
-                    _logger.LogInformation("[KimiService] 流式块 #{Seq} [{UpdateType}]: {Preview}",
+                    _logger.LogDebug("[KimiService] 流式块 #{Seq} [{UpdateType}]: {Preview}",
                         chunkCount, e.UpdateType, preview);
                 }
                 else if (e.UpdateType != null)
