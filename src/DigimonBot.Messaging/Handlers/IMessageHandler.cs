@@ -46,6 +46,7 @@ public class MessageResult
 {
     public bool Handled { get; set; }
     public string? Response { get; set; }
+    public List<string> AdditionalMessages { get; set; } = new();
     public bool IsCommand { get; set; }
     public bool EvolutionOccurred { get; set; }
     public string? EvolutionMessage { get; set; }

@@ -585,55 +585,64 @@ public class KimiCommand : ICommand
     /// </summary>
     private CommandResult FormatExecutionResult(ExecutionResult result, string repoName)
     {
+        const int ChunkSize = 2000;
+
         if (result.Success)
         {
-            var output = result.Output;
-            // 截断过长输出
-            if (output.Length > 2000)
-            {
-                output = output[..1900] + $"\n\n... (输出已截断，共 {result.Output.Length} 字符)";
-            }
+            var header = $"🤖 **Kimi 执行结果** (仓库: {repoName}, 耗时: {result.DurationMs}ms)\n\n";
 
-            var message = $"🤖 **Kimi 执行结果** (仓库: {repoName}, 耗时: {result.DurationMs}ms)\n\n{output}";
-
-            // 添加 Git 提交信息
+            // 添加 Git 提交信息和克隆链接
+            string footer;
             if (result.Committed && result.CommitHash != null)
             {
                 var shortHash = result.CommitHash.Length >= 8 ? result.CommitHash[..8] : result.CommitHash;
-                message += $"\n\n✅ 已自动提交到 Git\n提交: {shortHash}";
+                footer = $"\n\n✅ 已自动提交到 Git\n提交: {shortHash}";
             }
             else
             {
-                message += "\n\nℹ️ 无文件变更";
+                footer = "\n\nℹ️ 无文件变更";
             }
+            footer += FormatCloneUrl(repoName);
 
-            // 添加克隆链接
-            message += FormatCloneUrl(repoName);
+            var fullMessage = header + result.Output + footer;
+            var parts = SplitMessage(fullMessage, ChunkSize);
 
             return new CommandResult
             {
                 Success = true,
-                Message = message
+                Message = parts[0],
+                AdditionalMessages = parts.Skip(1).ToList()
             };
         }
         else
         {
             var error = string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
-            if (error.Length > 1000)
-            {
-                error = error[..900] + $"\n\n... (错误信息已截断)";
-            }
+            var fullMessage = $"❌ **Kimi执行失败** (仓库: {repoName}, 耗时: {result.DurationMs}ms)\n\n{error}";
+            var parts = SplitMessage(fullMessage, ChunkSize);
 
             return new CommandResult
             {
                 Success = false,
-                Message = $"""
-                    ❌ **Kimi执行失败** (仓库: {repoName}, 耗时: {result.DurationMs}ms)
-
-                    {error}
-                    """
+                Message = parts[0],
+                AdditionalMessages = parts.Skip(1).ToList()
             };
         }
+    }
+
+    /// <summary>
+    /// 将长消息拆分为不超过 chunkSize 字符的多个部分
+    /// </summary>
+    private static List<string> SplitMessage(string message, int chunkSize)
+    {
+        var parts = new List<string>();
+        var offset = 0;
+        while (offset < message.Length)
+        {
+            var length = Math.Min(chunkSize, message.Length - offset);
+            parts.Add(message.Substring(offset, length));
+            offset += length;
+        }
+        return parts;
     }
 
     /// <summary>

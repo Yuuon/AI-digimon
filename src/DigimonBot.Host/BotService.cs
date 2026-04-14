@@ -466,6 +466,20 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                     await SendPrivateMessageAsync(long.Parse(userId), result.Response);
                 }
 
+                // 发送额外的消息分片
+                foreach (var part in result.AdditionalMessages)
+                {
+                    await Task.Delay(500);
+                    if (context.IsGroupMessage && context.GroupId.HasValue)
+                    {
+                        await SendGroupMessageAsync(context.GroupId.Value, part);
+                    }
+                    else
+                    {
+                        await SendPrivateMessageAsync(long.Parse(userId), part);
+                    }
+                }
+
                 // 如果有进化消息，延迟后发送
                 if (result.EvolutionOccurred && !string.IsNullOrEmpty(result.EvolutionMessage))
                 {
