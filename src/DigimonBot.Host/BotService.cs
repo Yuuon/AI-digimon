@@ -902,10 +902,12 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     }
 
     /// <summary>
-    /// 将文件路径转换为 OneBot11 支持的 URI 格式
+    /// 将文件路径转换为 OneBot11 支持的 URI 格式。
+    /// 本地文件优先转换为 base64:// 格式，确保 NapCat 无需直接访问文件系统即可发送图片。
     /// </summary>
     private static string ResolveFileUri(string filePath)
     {
+        // Already a recognized URI scheme — pass through unchanged
         if (filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
             filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
@@ -913,7 +915,39 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         {
             return filePath;
         }
-        return "file://" + Path.GetFullPath(filePath);
+
+        // Convert data: URL (e.g., returned by ImageUploadService) to base64:// format
+        // NapCat does not understand the data: URI scheme
+        if (filePath.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var base64Start = filePath.IndexOf(";base64,", StringComparison.OrdinalIgnoreCase);
+            if (base64Start >= 0)
+            {
+                return "base64://" + filePath.Substring(base64Start + 8);
+            }
+        }
+
+        // For local file paths, embed the file as base64:// so NapCat can send
+        // the image regardless of filesystem accessibility (e.g., different containers).
+        var fullPath = Path.GetFullPath(filePath);
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(fullPath);
+                return "base64://" + Convert.ToBase64String(bytes);
+            }
+            catch (IOException)
+            {
+                // File exists but cannot be read — fall back to file:// URI
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // No read permission — fall back to file:// URI
+            }
+        }
+
+        return "file://" + fullPath;
     }
 
     /// <summary>
@@ -1023,17 +1057,45 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             _logger.LogInformation("Sending {Action} to {Url}: {Payload}", action, url, json);
             
             var response = await _httpClient.PostAsync(url, content);
+            var responseBody = await response.Content.ReadAsStringAsync();
             
             if (!response.IsSuccessStatusCode)
             {
-                var error = await response.Content.ReadAsStringAsync();
                 _logger.LogError("Failed to send message: {Status} - {Error}", 
-                    response.StatusCode, error);
+                    response.StatusCode, responseBody);
             }
             else
             {
-                _logger.LogInformation("Message sent successfully: {Status}", response.StatusCode);
-                _logger.LogDebug("Message sent successfully");
+                // NapCat always returns HTTP 200; check the JSON body for the actual result.
+                // A successful delivery has {"status":"ok"} or {"retcode":0}.
+                try
+                {
+                    using var doc = JsonDocument.Parse(responseBody);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("status", out var statusProp) &&
+                        statusProp.GetString() == "failed")
+                    {
+                        var retcode = root.TryGetProperty("retcode", out var retcodeProp)
+                            ? retcodeProp.GetInt32().ToString()
+                            : "unknown";
+                        var msg = root.TryGetProperty("msg", out var msgProp)
+                            ? msgProp.GetString()
+                            : responseBody;
+                        _logger.LogError(
+                            "NapCat failed to send {Action}: retcode={Retcode}, msg={Message}",
+                            action, retcode, msg);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Message sent successfully via {Action}", action);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    // Response body is not valid JSON — assume success since HTTP status was OK
+                    _logger.LogWarning(ex, "Could not parse NapCat response body for {Action}; assuming success", action);
+                    _logger.LogInformation("Message sent successfully: {Status}", response.StatusCode);
+                }
             }
         }
         catch (Exception ex)
