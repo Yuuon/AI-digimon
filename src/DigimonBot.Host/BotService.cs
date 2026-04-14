@@ -902,6 +902,21 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     }
 
     /// <summary>
+    /// 将文件路径转换为 OneBot11 支持的 URI 格式
+    /// </summary>
+    private static string ResolveFileUri(string filePath)
+    {
+        if (filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("base64://", StringComparison.OrdinalIgnoreCase))
+        {
+            return filePath;
+        }
+        return "file://" + Path.GetFullPath(filePath);
+    }
+
+    /// <summary>
     /// 构建包含图片的消息段数组（OneBot11 message segment 格式）
     /// </summary>
     /// <param name="filePath">图片文件路径（本地绝对路径或URL）</param>
@@ -915,17 +930,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             segments.Add(new { type = "text", data = new { text = text } });
         }
 
-        // 支持 file:// 协议、http(s):// URL 或本地路径
-        var fileUri = filePath;
-        if (!filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-            !filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase) &&
-            !filePath.StartsWith("base64://", StringComparison.OrdinalIgnoreCase))
-        {
-            fileUri = "file://" + Path.GetFullPath(filePath);
-        }
-
-        segments.Add(new { type = "image", data = new { file = fileUri } });
+        segments.Add(new { type = "image", data = new { file = ResolveFileUri(filePath) } });
 
         return segments;
     }
@@ -989,23 +994,13 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             var filePath = remaining[pathStart..pathEnd].Trim();
             if (!string.IsNullOrEmpty(filePath))
             {
-                // 支持 file:// 协议、http(s):// URL 或本地路径
-                var fileUri = filePath;
-                if (!filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-                    !filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-                    !filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase) &&
-                    !filePath.StartsWith("base64://", StringComparison.OrdinalIgnoreCase))
-                {
-                    fileUri = "file://" + Path.GetFullPath(filePath);
-                }
-
-                segments.Add(new { type = "image", data = new { file = fileUri } });
+                segments.Add(new { type = "image", data = new { file = ResolveFileUri(filePath) } });
             }
 
             // 移动到剩余部分
             remaining = pathEnd < remaining.Length ? remaining[pathEnd..] : "";
             // 如果当前位置是换行符，跳过它
-            if (remaining.StartsWith('\n'))
+            if (remaining.Length > 0 && remaining[0] == '\n')
             {
                 remaining = remaining[1..];
             }

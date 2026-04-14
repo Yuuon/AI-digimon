@@ -326,6 +326,10 @@ public class DigimonMessageHandler : IMessageHandler
         sb.AppendLine($"⏱️ 耗时: {result.DurationMs}ms");
 
         var fullMessage = sb.ToString();
+        if (string.IsNullOrEmpty(fullMessage))
+        {
+            return ("✅ 执行完成", new List<string>());
+        }
         var parts = SplitMessage(fullMessage, ChunkSize);
         return (parts[0], parts.Skip(1).ToList());
     }
