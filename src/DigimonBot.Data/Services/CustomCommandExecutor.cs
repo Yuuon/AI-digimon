@@ -11,14 +11,17 @@ namespace DigimonBot.Data.Services;
 public class CustomCommandExecutor : ICustomCommandExecutor
 {
     private readonly string _basePath;
+    private readonly int _defaultTimeoutSeconds;
     private readonly ILogger<CustomCommandExecutor> _logger;
 
     public CustomCommandExecutor(
         string basePath,
-        ILogger<CustomCommandExecutor> logger)
+        ILogger<CustomCommandExecutor> logger,
+        int defaultTimeoutSeconds = 300)
     {
         _basePath = basePath;
         _logger = logger;
+        _defaultTimeoutSeconds = defaultTimeoutSeconds;
     }
 
     /// <inheritdoc/>
@@ -26,8 +29,11 @@ public class CustomCommandExecutor : ICustomCommandExecutor
         CustomCommand command,
         string[] args,
         string userId,
-        int timeoutSeconds = 30)
+        int timeoutSeconds = 0)
     {
+        if (timeoutSeconds <= 0)
+            timeoutSeconds = _defaultTimeoutSeconds;
+
         var stopwatch = Stopwatch.StartNew();
 
         // 构建完整路径
