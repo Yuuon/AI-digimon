@@ -13,13 +13,13 @@ public interface ICustomCommandExecutor
     /// <param name="command">命令实体</param>
     /// <param name="args">命令参数</param>
     /// <param name="userId">执行用户ID</param>
-    /// <param name="timeoutSeconds">超时时间（秒），默认30秒</param>
+    /// <param name="timeoutSeconds">超时时间（秒），0或负数表示使用配置的默认超时</param>
     /// <returns>执行结果</returns>
     Task<CustomCommandResult> ExecuteAsync(
         CustomCommand command,
         string[] args,
         string userId,
-        int timeoutSeconds = 30);
+        int timeoutSeconds = 0);
 
     /// <summary>
     /// 验证二进制路径是否安全（在基目录内，无目录遍历）

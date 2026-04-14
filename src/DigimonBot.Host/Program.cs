@@ -368,7 +368,8 @@ public class Program
                     var kimiConfig = provider.GetRequiredService<KimiConfigService>();
                     return new DigimonBot.Data.Services.CustomCommandExecutor(
                         kimiConfig.CurrentConfig.Execution.BasePath,
-                        provider.GetRequiredService<ILogger<DigimonBot.Data.Services.CustomCommandExecutor>>());
+                        provider.GetRequiredService<ILogger<DigimonBot.Data.Services.CustomCommandExecutor>>(),
+                        kimiConfig.CurrentConfig.Execution.DefaultTimeoutSeconds);
                 });
 
                 services.AddSingleton<IKimiRepositoryManager>(provider =>
