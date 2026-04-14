@@ -820,27 +820,193 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     }
 
     /// <summary>
-    /// 发送私聊消息
+    /// 发送私聊消息（支持 &lt;img&gt; 标签自动解析为图片消息）
     /// </summary>
     private async Task SendPrivateMessageAsync(long userId, string message)
     {
-        await SendMessageAsync("send_private_msg", new
+        var segments = ParseMessageSegments(message);
+        if (segments != null)
         {
-            user_id = userId,
-            message = message
+            // 包含图片标签，使用消息段数组格式发送
+            await SendMessageAsync("send_private_msg", new
+            {
+                user_id = userId,
+                message = segments
+            });
+        }
+        else
+        {
+            await SendMessageAsync("send_private_msg", new
+            {
+                user_id = userId,
+                message = message
+            });
+        }
+    }
+
+    /// <summary>
+    /// 发送群消息（支持 &lt;img&gt; 标签自动解析为图片消息）
+    /// </summary>
+    private async Task SendGroupMessageAsync(long groupId, string message)
+    {
+        var segments = ParseMessageSegments(message);
+        if (segments != null)
+        {
+            // 包含图片标签，使用消息段数组格式发送
+            await SendMessageAsync("send_group_msg", new
+            {
+                group_id = groupId,
+                message = segments
+            });
+        }
+        else
+        {
+            await SendMessageAsync("send_group_msg", new
+            {
+                group_id = groupId,
+                message = message
+            });
+        }
+    }
+
+    /// <summary>
+    /// 发送群图片消息（供 Bot 内部直接使用）
+    /// </summary>
+    /// <param name="groupId">群号</param>
+    /// <param name="filePath">图片文件路径（本地绝对路径）</param>
+    /// <param name="text">可选的附带文本</param>
+    public async Task SendGroupImageAsync(long groupId, string filePath, string? text = null)
+    {
+        var segments = BuildImageMessageSegments(filePath, text);
+        await SendMessageAsync("send_group_msg", new
+        {
+            group_id = groupId,
+            message = segments
         });
     }
 
     /// <summary>
-    /// 发送群消息
+    /// 发送私聊图片消息（供 Bot 内部直接使用）
     /// </summary>
-    private async Task SendGroupMessageAsync(long groupId, string message)
+    /// <param name="userId">用户QQ号</param>
+    /// <param name="filePath">图片文件路径（本地绝对路径）</param>
+    /// <param name="text">可选的附带文本</param>
+    public async Task SendPrivateImageAsync(long userId, string filePath, string? text = null)
     {
-        await SendMessageAsync("send_group_msg", new
+        var segments = BuildImageMessageSegments(filePath, text);
+        await SendMessageAsync("send_private_msg", new
         {
-            group_id = groupId,
-            message = message
+            user_id = userId,
+            message = segments
         });
+    }
+
+    /// <summary>
+    /// 将文件路径转换为 OneBot11 支持的 URI 格式
+    /// </summary>
+    private static string ResolveFileUri(string filePath)
+    {
+        if (filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
+            filePath.StartsWith("base64://", StringComparison.OrdinalIgnoreCase))
+        {
+            return filePath;
+        }
+        return "file://" + Path.GetFullPath(filePath);
+    }
+
+    /// <summary>
+    /// 构建包含图片的消息段数组（OneBot11 message segment 格式）
+    /// </summary>
+    /// <param name="filePath">图片文件路径（本地绝对路径或URL）</param>
+    /// <param name="text">可选的附带文本</param>
+    private static List<object> BuildImageMessageSegments(string filePath, string? text = null)
+    {
+        var segments = new List<object>();
+
+        if (!string.IsNullOrEmpty(text))
+        {
+            segments.Add(new { type = "text", data = new { text = text } });
+        }
+
+        segments.Add(new { type = "image", data = new { file = ResolveFileUri(filePath) } });
+
+        return segments;
+    }
+
+    /// <summary>
+    /// 解析消息中的 &lt;img&gt; 标签，将消息转换为 OneBot11 消息段数组。
+    /// 格式: &lt;img&gt;file_path
+    /// 支持文本和图片混合消息。
+    /// </summary>
+    /// <returns>消息段数组，如果消息不包含 &lt;img&gt; 标签则返回 null</returns>
+    private static List<object>? ParseMessageSegments(string message)
+    {
+        const string imgTag = "<img>";
+        if (!message.Contains(imgTag, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var segments = new List<object>();
+        var remaining = message;
+
+        while (remaining.Length > 0)
+        {
+            var imgIndex = remaining.IndexOf(imgTag, StringComparison.OrdinalIgnoreCase);
+            if (imgIndex < 0)
+            {
+                // 没有更多图片标签，剩余部分作为文本
+                if (remaining.Length > 0)
+                {
+                    segments.Add(new { type = "text", data = new { text = remaining } });
+                }
+                break;
+            }
+
+            // 图片标签之前的文本
+            if (imgIndex > 0)
+            {
+                var textBefore = remaining[..imgIndex];
+                if (!string.IsNullOrWhiteSpace(textBefore))
+                {
+                    segments.Add(new { type = "text", data = new { text = textBefore } });
+                }
+            }
+
+            // 提取图片路径：从 <img> 后到行尾或下一个 <img> 标签
+            var pathStart = imgIndex + imgTag.Length;
+            var pathEnd = remaining.Length;
+
+            // 图片路径到行尾
+            var newlineIndex = remaining.IndexOf('\n', pathStart);
+            if (newlineIndex >= 0)
+            {
+                pathEnd = newlineIndex;
+            }
+
+            // 或者到下一个 <img> 标签
+            var nextImgIndex = remaining.IndexOf(imgTag, pathStart, StringComparison.OrdinalIgnoreCase);
+            if (nextImgIndex >= 0 && nextImgIndex < pathEnd)
+            {
+                pathEnd = nextImgIndex;
+            }
+
+            var filePath = remaining[pathStart..pathEnd].Trim();
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                segments.Add(new { type = "image", data = new { file = ResolveFileUri(filePath) } });
+            }
+
+            // 移动到剩余部分
+            remaining = pathEnd < remaining.Length ? remaining[pathEnd..] : "";
+            // 如果当前位置是换行符，跳过它
+            if (remaining.Length > 0 && remaining[0] == '\n')
+            {
+                remaining = remaining[1..];
+            }
+        }
+
+        return segments.Count > 0 ? segments : null;
     }
 
     /// <summary>

@@ -266,13 +266,14 @@ public class DigimonMessageHandler : IMessageHandler
             // 更新使用统计
             await _customCommandRepo.UpdateUsageAsync(customCmd.Id);
 
-            // 格式化结果
-            var response = FormatCustomCommandResult(result, customCmd);
+            // 格式化结果（支持多消息分片）
+            var (response, additionalMessages) = FormatCustomCommandResult(result, customCmd);
 
             return new MessageResult
             {
                 Handled = true,
                 Response = response,
+                AdditionalMessages = additionalMessages,
                 IsCommand = true
             };
         }
@@ -289,10 +290,12 @@ public class DigimonMessageHandler : IMessageHandler
     }
 
     /// <summary>
-    /// 格式化自定义命令执行结果
+    /// 格式化自定义命令执行结果（支持多消息分片，不截断输出）
     /// </summary>
-    private static string FormatCustomCommandResult(CustomCommandResult result, Core.Models.CustomCommand cmd)
+    private static (string Response, List<string> AdditionalMessages) FormatCustomCommandResult(CustomCommandResult result, Core.Models.CustomCommand cmd)
     {
+        const int ChunkSize = 2000;
+
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"🚀 **{cmd.Name}** 执行结果");
         sb.AppendLine();
@@ -301,10 +304,7 @@ public class DigimonMessageHandler : IMessageHandler
         {
             if (!string.IsNullOrEmpty(result.Output))
             {
-                var output = result.Output.Length > 2000
-                    ? result.Output[..1900] + $"\n\n... (输出已截断)"
-                    : result.Output;
-                sb.AppendLine(output);
+                sb.AppendLine(result.Output);
             }
             else
             {
@@ -325,7 +325,29 @@ public class DigimonMessageHandler : IMessageHandler
 
         sb.AppendLine($"⏱️ 耗时: {result.DurationMs}ms");
 
-        return sb.ToString();
+        var fullMessage = sb.ToString();
+        if (string.IsNullOrEmpty(fullMessage))
+        {
+            return ("✅ 执行完成", new List<string>());
+        }
+        var parts = SplitMessage(fullMessage, ChunkSize);
+        return (parts[0], parts.Skip(1).ToList());
+    }
+
+    /// <summary>
+    /// 将长消息拆分为不超过 chunkSize 字符的多个部分
+    /// </summary>
+    private static List<string> SplitMessage(string message, int chunkSize)
+    {
+        var parts = new List<string>();
+        var offset = 0;
+        while (offset < message.Length)
+        {
+            var length = Math.Min(chunkSize, message.Length - offset);
+            parts.Add(message.Substring(offset, length));
+            offset += length;
+        }
+        return parts;
     }
 
     private async Task<MessageResult> HandleAiConversationAsync(MessageContext context)
