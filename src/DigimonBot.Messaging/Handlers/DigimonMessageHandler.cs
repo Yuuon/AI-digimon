@@ -225,6 +225,7 @@ public class DigimonMessageHandler : IMessageHandler
         {
             Handled = true,
             Response = result.Message,
+            AdditionalMessages = result.AdditionalMessages,
             IsCommand = true
         };
     }

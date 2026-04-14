@@ -33,6 +33,7 @@ public class CommandResult
 {
     public bool Success { get; set; }
     public string Message { get; set; } = "";
+    public List<string> AdditionalMessages { get; set; } = new();
     public bool IsAiResponseNeeded => false;
     public bool EvolutionOccurred { get; set; }
     public string EvolutionMessage { get; set; } = "";
