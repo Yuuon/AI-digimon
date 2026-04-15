@@ -267,12 +267,10 @@ public class TavernChatCommand : ICommand
         // 生成回复
         var response = await _tavernService.GenerateResponseAsync(userMessage, context.UserName);
         
-        var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
-        
         return new CommandResult
         {
             Success = true,
-            Message = $"**{characterName}**: {response}"
+            Message = response
         };
     }
 }
