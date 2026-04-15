@@ -162,14 +162,9 @@ public class TavernService : ITavernService
 
     public async Task<string> GenerateResponseAsync(string userMessage, string userName)
     {
-        if (_currentCharacter == null)
+        if (_currentCharacter == null || !_isEnabled)
         {
-            return "[酒馆模式] 没有加载角色，请先使用 /loadchar 加载角色。";
-        }
-
-        if (!_isEnabled)
-        {
-            return "[酒馆模式] 酒馆模式未开启，请先使用 /酒馆 on 开启。";
+            return "";
         }
 
         try
@@ -220,7 +215,7 @@ public class TavernService : ITavernService
         catch (Exception ex)
         {
             _logger.LogError(ex, "生成酒馆回复失败");
-            return $"[酒馆模式] 生成回复时出错: {ex.Message}";
+            return "";
         }
     }
 
@@ -301,8 +296,13 @@ public class TavernService : ITavernService
             sb.AppendLine($"对话示例：{_currentCharacter.MessageExample}");
         }
         
-        sb.AppendLine($"请记住你的人设，以{_currentCharacter.Name}的身份回应。");
-        sb.AppendLine("保持角色性格一致性，回应要自然、有角色特色。");
+        sb.AppendLine($"请完全代入{_currentCharacter.Name}这个角色，像真实的人一样用聊天的方式回复。");
+        sb.AppendLine("重要规则：");
+        sb.AppendLine("- 直接说话，不要加任何角色名前缀（如'小明：'这类格式）");
+        sb.AppendLine("- 不要使用*动作描写*或（旁白）括号，只说对话本身");
+        sb.AppendLine("- 不要使用markdown格式（**加粗**、列表等）");
+        sb.AppendLine("- 回复要简短自然，像真人发消息一样，不要长篇大论");
+        sb.AppendLine("- 绝对不要提及自己是AI或机器人");
         
         return sb.ToString();
     }
