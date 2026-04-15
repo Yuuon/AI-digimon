@@ -215,7 +215,7 @@ public class TavernService : ITavernService
         catch (Exception ex)
         {
             _logger.LogError(ex, "生成酒馆回复失败");
-            return "";
+            return $"[酒馆模式] 生成回复时出错: {ex.Message}";
         }
     }
 
