@@ -162,9 +162,14 @@ public class TavernService : ITavernService
 
     public async Task<string> GenerateResponseAsync(string userMessage, string userName)
     {
-        if (_currentCharacter == null || !_isEnabled)
+        if (_currentCharacter == null)
         {
-            return "";
+            return "[酒馆模式] 没有加载角色，请先使用 /loadchar 加载角色。";
+        }
+
+        if (!_isEnabled)
+        {
+            return "[酒馆模式] 酒馆模式未开启，请先使用 /酒馆 on 开启。";
         }
 
         try
