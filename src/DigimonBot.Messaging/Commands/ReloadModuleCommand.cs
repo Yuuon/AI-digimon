@@ -15,7 +15,7 @@ public class ReloadModuleCommand : ICommand
     private readonly ILogger<ReloadModuleCommand> _logger;
 
     public string Name => "reload";
-    public string[] Aliases => new[] { "hotfix", "reloadmod" };
+    public string[] Aliases => new[] { "reloadmod" };
     public string Description => "热重载模块 - /reload [模块名|all]";
 
     public ReloadModuleCommand(

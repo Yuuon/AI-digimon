@@ -316,7 +316,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         // 群聊特殊处理：检查是否@Bot或以/开头
         bool isAtBot = false;
         bool isCommand = false;
-        bool shouldDispatchToCommandModule = true;
+        bool shouldSendResponse = true;
         
         if (messageType == "group")
         {
@@ -332,10 +332,10 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             }
             
             // For non-@bot and non-command group messages, still dispatch to observer modules
-            // (TavernModule observes all group messages) but don't route to command handler
+            // (TavernModule observes all group messages) but don't send any response to the group
             if (!isAtBot && !isCommand)
             {
-                shouldDispatchToCommandModule = false;
+                shouldSendResponse = false;
             }
 
             // 去除@的文本
@@ -370,9 +370,9 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         {
             var result = await _moduleManager.DispatchMessageAsync(moduleMessage);
 
-            // Only send response if shouldDispatchToCommandModule is true
+            // Only send response if shouldSendResponse is true
             // (observer modules like TavernModule never set Handled=true for non-targeted messages)
-            if (!shouldDispatchToCommandModule)
+            if (!shouldSendResponse)
                 return;
             
             if (result.Handled && !string.IsNullOrEmpty(result.Response))
@@ -416,7 +416,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                     }
                 }
             }
-            else if (shouldDispatchToCommandModule)
+            else if (shouldSendResponse)
             {
                 _logger.LogWarning("Message not handled or empty response");
             }

@@ -106,31 +106,29 @@ public class ModuleManager
     /// </summary>
     public async Task<bool> ReloadModuleAsync(string name)
     {
-        _lock.EnterReadLock();
-        IModule? module;
+        _lock.EnterWriteLock();
         try
         {
-            module = _modules.FirstOrDefault(m => m.Name == name);
+            var module = _modules.FirstOrDefault(m => m.Name == name);
+            if (module == null)
+            {
+                _logger.LogWarning("Module '{Name}' not found for reload", name);
+                return false;
+            }
+
+            if (_context == null)
+                throw new InvalidOperationException("ModuleContext must be set before reloading modules.");
+
+            _logger.LogInformation("Reloading module '{Name}'...", name);
+            await module.ShutdownAsync();
+            await module.InitializeAsync(_context);
+            _logger.LogInformation("Module '{Name}' reloaded successfully", name);
+            return true;
         }
         finally
         {
-            _lock.ExitReadLock();
+            _lock.ExitWriteLock();
         }
-
-        if (module == null)
-        {
-            _logger.LogWarning("Module '{Name}' not found for reload", name);
-            return false;
-        }
-
-        if (_context == null)
-            throw new InvalidOperationException("ModuleContext must be set before reloading modules.");
-
-        _logger.LogInformation("Reloading module '{Name}'...", name);
-        await module.ShutdownAsync();
-        await module.InitializeAsync(_context);
-        _logger.LogInformation("Module '{Name}' reloaded successfully", name);
-        return true;
     }
 
     /// <summary>
