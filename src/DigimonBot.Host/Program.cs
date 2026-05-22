@@ -1,11 +1,13 @@
 using DigimonBot.AI.Services;
 using DigimonBot.Core.Events;
+using DigimonBot.Core.Modules;
 using DigimonBot.Core.Services;
 using DigimonBot.Data.Database;
 using DigimonBot.Data.Repositories;
 using DigimonBot.Data.Repositories.Sqlite;
 using DigimonBot.Data.Services;
 using DigimonBot.Host.Configs;
+using DigimonBot.Host.Modules;
 using DigimonBot.Host.Services;
 using DigimonBot.Messaging.Commands;
 using DigimonBot.Messaging.Handlers;
@@ -348,6 +350,12 @@ public class Program
                     registry.Register(new ListCustomCommandsCommand(
                         provider.GetRequiredService<ICustomCommandRepository>()));
 
+                    // 注册模块热重载命令
+                    registry.Register(new ReloadModuleCommand(
+                        provider.GetRequiredService<DigimonBot.Core.Modules.ModuleManager>(),
+                        adminConfig,
+                        provider.GetRequiredService<ILogger<ReloadModuleCommand>>()));
+
                     return registry;
                 });
 
@@ -451,6 +459,14 @@ public class Program
                         provider.GetService<ICustomCommandExecutor>(),
                         whitelist);
                 });
+
+                // 注册模块管理器
+                services.AddSingleton<DigimonBot.Core.Modules.ModuleManager>();
+
+                // 注册模块（支持热重载）
+                services.AddSingleton<DigimonBot.Core.Modules.IModule, DigimonBot.Host.Modules.DigimonModule>();
+                services.AddSingleton<DigimonBot.Core.Modules.IModule, DigimonBot.Host.Modules.TavernModule>();
+                services.AddSingleton<DigimonBot.Core.Modules.IModule, DigimonBot.Host.Modules.EventModule>();
 
                 // 注册Bot服务
                 services.AddHostedService<BotService>();

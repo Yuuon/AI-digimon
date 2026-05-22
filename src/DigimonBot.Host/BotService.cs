@@ -1,5 +1,8 @@
 using DigimonBot.Host.Configs;
+using DigimonBot.Core.Modules;
 using DigimonBot.Core.Services;
+using DigimonBot.Host.Modules;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
@@ -11,47 +14,34 @@ using System.Text.Json.Serialization;
 namespace DigimonBot.Host;
 
 /// <summary>
-/// NapCatQQ Bot 服务
-/// 通过 WebSocket 接收消息，通过 HTTP API 发送消息
+/// NapCatQQ Bot 服务 - 仅负责协议层（WebSocket/HTTP）和消息路由。
+/// 所有具体业务逻辑由模块(IModule)处理。
 /// </summary>
 public class BotService : BackgroundService, Core.Services.IImageUrlResolver
 {
     private readonly ILogger<BotService> _logger;
     private readonly AppSettings _settings;
-    private readonly Messaging.Handlers.IMessageHandler _messageHandler;
+    private readonly ModuleManager _moduleManager;
     private readonly IMessageHistoryService _messageHistory;
+    private readonly IServiceProvider _serviceProvider;
     private readonly HttpClient _httpClient;
     private ClientWebSocket? _webSocket;
     private readonly CancellationTokenSource _reconnectCts = new();
     private bool _isRunning;
-    private long _botQQ; // Bot 自己的 QQ 号
-
-    private readonly Core.Events.IEventPublisher _eventPublisher;
-    private readonly Core.Services.IGroupChatMonitorService _groupChatMonitor;
-    private readonly Core.Services.ITavernService _tavernService;
-    private readonly Core.Services.ITavernConfigService _tavernConfigService;
-    
-    // 特别关注用户冷却时间记录：Key = "{groupId}:{userId}"
-    private readonly Dictionary<string, DateTime> _specialFocusCooldown = new();
+    private long _botQQ;
 
     public BotService(
         ILogger<BotService> logger,
         IOptions<AppSettings> settings,
-        Messaging.Handlers.IMessageHandler messageHandler,
+        ModuleManager moduleManager,
         IMessageHistoryService messageHistory,
-        Core.Events.IEventPublisher eventPublisher,
-        Core.Services.IGroupChatMonitorService groupChatMonitor,
-        Core.Services.ITavernService tavernService,
-        Core.Services.ITavernConfigService tavernConfigService)
+        IServiceProvider serviceProvider)
     {
         _logger = logger;
         _settings = settings.Value;
-        _messageHandler = messageHandler;
+        _moduleManager = moduleManager;
         _messageHistory = messageHistory;
-        _eventPublisher = eventPublisher;
-        _groupChatMonitor = groupChatMonitor;
-        _tavernService = tavernService;
-        _tavernConfigService = tavernConfigService;
+        _serviceProvider = serviceProvider;
         _httpClient = new HttpClient();
         
         // 从配置读取 Bot QQ 号
@@ -70,75 +60,6 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         {
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_settings.QQBot.NapCat.HttpAccessToken}");
         }
-        
-        // 订阅酒馆自主发言事件
-        _eventPublisher.OnTavernAutoSpeak += async (sender, args) =>
-        {
-            try
-            {
-                _logger.LogInformation("收到酒馆自主发言事件: Group={GroupId}", args.GroupId);
-                await SendGroupMessageAsync(args.GroupId, args.Message);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "发送酒馆自主发言消息失败");
-            }
-        };
-        
-        // 订阅进化就绪事件（多个进化选项可用时通知用户）
-        _eventPublisher.OnEvolutionReady += async (sender, args) =>
-        {
-            try
-            {
-                _logger.LogInformation("收到进化就绪事件: User={UserId}, Current={Current}, Options={Count}", 
-                    args.UserId, args.CurrentDigimonName, args.AvailableEvolutions.Count);
-                
-                var message = BuildEvolutionReadyMessage(args);
-                
-                if (args.GroupId > 0)
-                {
-                    // 群聊消息
-                    await SendGroupMessageAsync(args.GroupId, message);
-                }
-                else
-                {
-                    // 私聊消息
-                    var userId = args.UserId.Split('@')[0]; // 移除可能的 @g{GroupId} 后缀
-                    if (long.TryParse(userId, out var qq))
-                    {
-                        await SendPrivateMessageAsync(qq, message);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "发送进化就绪通知失败");
-            }
-        };
-    }
-    
-    /// <summary>
-    /// 构建进化就绪通知消息
-    /// </summary>
-    private string BuildEvolutionReadyMessage(Core.Events.EvolutionReadyEventArgs args)
-    {
-        var options = new List<string>();
-        for (int i = 0; i < args.AvailableEvolutions.Count; i++)
-        {
-            var evo = args.AvailableEvolutions[i];
-            options.Add($"**{i + 1}. {evo.TargetName}** - {evo.Description}");
-        }
-        
-        return $"""
-            🌟 **{args.CurrentDigimonName}** 可以进化了！
-
-            检测到 **{args.AvailableEvolutions.Count}** 个可进化分支：
-
-            {string.Join("\n", options)}
-
-            使用 `/evoselect <序号>` 选择想要进化的分支
-            例如：`/evoselect 1`
-            """;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -149,6 +70,14 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         
         _isRunning = true;
 
+        // Initialize module context and load modules
+        var context = new BotModuleContext(
+            SendGroupMessageAsync,
+            SendPrivateMessageAsync,
+            _serviceProvider);
+        _moduleManager.SetContext(context);
+        await LoadModulesAsync();
+
         try
         {
             await RunBotAsync(stoppingToken);
@@ -158,6 +87,19 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             _logger.LogError(ex, "Bot service failed");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Load all modules from DI container.
+    /// </summary>
+    private async Task LoadModulesAsync()
+    {
+        var modules = _serviceProvider.GetServices<IModule>();
+        foreach (var module in modules)
+        {
+            await _moduleManager.LoadModuleAsync(module);
+        }
+        _logger.LogInformation("Loaded {Count} modules", _moduleManager.Modules.Count);
     }
 
     private async Task RunBotAsync(CancellationToken cancellationToken)
@@ -297,8 +239,6 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     {
         try
         {
-            // _logger.LogDebug("收到WebSocket消息: {Message}", jsonMessage);
-            
             var eventData = JsonSerializer.Deserialize<OneBotEvent>(jsonMessage);
             if (eventData == null) 
             {
@@ -306,25 +246,21 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                 return;
             }
 
-            // _logger.LogDebug("消息类型: PostType={PostType}, MessageType={MessageType}", 
-            //     eventData.PostType, eventData.MessageType);
-
             // 处理消息事件
             if (eventData.PostType == "message")
             {
-                // _logger.LogInformation("收到聊天消息: 类型={MsgType}, 发送者={User}", 
-                //     eventData.MessageType, eventData.UserId);
                 await HandleMessageEventAsync(eventData);
             }
-            // 处理元事件（心跳等）
-            else if (eventData.PostType == "meta_event")
+            // 非消息事件分发给模块
+            else
             {
-                _logger.LogDebug("Meta event: {MetaEvent}", eventData.MetaEventType);
-            }
-            // 处理通知事件
-            else if (eventData.PostType == "notice")
-            {
-                _logger.LogDebug("Notice event: {NoticeType}", eventData.NoticeType);
+                var evt = new ModuleEvent
+                {
+                    PostType = eventData.PostType,
+                    EventType = eventData.MetaEventType ?? eventData.NoticeType,
+                    RawJson = jsonMessage
+                };
+                await _moduleManager.DispatchEventAsync(evt);
             }
         }
         catch (Exception ex)
@@ -334,13 +270,12 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     }
 
     /// <summary>
-    /// 处理消息事件（私聊/群聊）
+    /// 处理消息事件（私聊/群聊）- 仅解析协议，然后委托给模块处理
     /// </summary>
     private async Task HandleMessageEventAsync(OneBotEvent eventData)
     {
         var messageType = eventData.MessageType;
         var userId = eventData.UserId?.ToString() ?? "unknown";
-        var messageId = eventData.MessageId;
         
         // 更新 Bot QQ 号
         if (eventData.SelfId > 0 && _botQQ == 0)
@@ -350,13 +285,10 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         }
         
         // 提取消息内容
-        _logger.LogDebug("开始提取消息内容...");
         var content = ExtractMessageContent(eventData.Message);
-        _logger.LogInformation("提取后的消息内容: '{Content}'", content);
         
         if (string.IsNullOrWhiteSpace(content)) 
         {
-            _logger.LogWarning("消息内容为空，忽略此消息");
             return;
         }
 
@@ -381,18 +313,10 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             RawData = eventData.Message
         });
         
-        // 群聊监测：记录所有群消息（在过滤之前，确保监测到所有消息）
-        if (messageType == "group" && eventData.GroupId.HasValue)
-        {
-            _groupChatMonitor.AddMessage(eventData.GroupId.Value, userId, userName, content);
-            
-            // 检查是否触发酒馆自主发言（在过滤之前，确保普通消息也能触发）
-            _ = Task.Run(async () => await CheckTavernAutoSpeakAsync(eventData.GroupId.Value));
-        }
-        
         // 群聊特殊处理：检查是否@Bot或以/开头
         bool isAtBot = false;
         bool isCommand = false;
+        bool shouldDispatchToCommandModule = true;
         
         if (messageType == "group")
         {
@@ -407,25 +331,22 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                 return;
             }
             
-            // 特别关注检查（在过滤之前，但需要知道是否@Bot）
-            if (eventData.GroupId.HasValue)
+            // For non-@bot and non-command group messages, still dispatch to observer modules
+            // (TavernModule observes all group messages) but don't route to command handler
+            if (!isAtBot && !isCommand)
             {
-                _ = Task.Run(async () => await CheckSpecialFocusAsync(
-                    eventData.GroupId.Value, userId, userName, content, isAtBot));
+                shouldDispatchToCommandModule = false;
             }
-            
-            if (!isAtBot && !isCommand) return; // 忽略不相关的群消息
 
             // 去除@的文本
             if (isAtBot)
             {
                 content = RemoveAtContent(content, _botQQ);
-                // _logger.LogDebug("去除@后的内容: '{Content}'", content);
             }
         }
 
-        // 构建消息上下文
-        var context = new Messaging.Handlers.MessageContext
+        // Build module message
+        var moduleMessage = new ModuleMessage
         {
             UserId = userId,
             OriginalUserId = userId,
@@ -435,44 +356,45 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
             IsGroupMessage = messageType == "group",
             IsMentioned = isAtBot,
             Timestamp = DateTime.Now,
-            Source = messageType == "group" ? Messaging.Handlers.MessageSource.Group : Messaging.Handlers.MessageSource.Private,
-            MentionedUserIds = mentionedUserIds
+            MentionedUserIds = mentionedUserIds,
+            RawMessage = eventData.Message
         };
 
         _logger.LogInformation("[{Source}] {User}: {Content}", 
-            context.IsGroupMessage ? $"Group {context.GroupId}" : "Private",
-            context.UserName, 
-            context.Content);
+            moduleMessage.IsGroupMessage ? $"Group {moduleMessage.GroupId}" : "Private",
+            moduleMessage.UserName, 
+            moduleMessage.Content);
 
-        // 处理消息
+        // Dispatch message to all modules
         try
         {
-            _logger.LogDebug("Calling message handler...");
-            var result = await _messageHandler.HandleMessageAsync(context);
-            _logger.LogDebug("Handler result: Handled={Handled}, HasResponse={HasResponse}", 
-                result.Handled, !string.IsNullOrEmpty(result.Response));
+            var result = await _moduleManager.DispatchMessageAsync(moduleMessage);
+
+            // Only send response if shouldDispatchToCommandModule is true
+            // (observer modules like TavernModule never set Handled=true for non-targeted messages)
+            if (!shouldDispatchToCommandModule)
+                return;
             
             if (result.Handled && !string.IsNullOrEmpty(result.Response))
             {
                 _logger.LogInformation("Sending response: {Response}", result.Response);
                 
-                // 发送回复
-                if (context.IsGroupMessage && context.GroupId.HasValue)
+                if (moduleMessage.IsGroupMessage && moduleMessage.GroupId.HasValue)
                 {
-                    await SendGroupMessageAsync(context.GroupId.Value, result.Response);
+                    await SendGroupMessageAsync(moduleMessage.GroupId.Value, result.Response);
                 }
                 else
                 {
                     await SendPrivateMessageAsync(long.Parse(userId), result.Response);
                 }
 
-                // 发送额外的消息分片
+                // Send additional message parts
                 foreach (var part in result.AdditionalMessages)
                 {
                     await Task.Delay(500);
-                    if (context.IsGroupMessage && context.GroupId.HasValue)
+                    if (moduleMessage.IsGroupMessage && moduleMessage.GroupId.HasValue)
                     {
-                        await SendGroupMessageAsync(context.GroupId.Value, part);
+                        await SendGroupMessageAsync(moduleMessage.GroupId.Value, part);
                     }
                     else
                     {
@@ -480,14 +402,13 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                     }
                 }
 
-                // 如果有进化消息，延迟后发送
+                // Send evolution message if occurred
                 if (result.EvolutionOccurred && !string.IsNullOrEmpty(result.EvolutionMessage))
                 {
                     await Task.Delay(500);
-                    
-                    if (context.IsGroupMessage && context.GroupId.HasValue)
+                    if (moduleMessage.IsGroupMessage && moduleMessage.GroupId.HasValue)
                     {
-                        await SendGroupMessageAsync(context.GroupId.Value, result.EvolutionMessage);
+                        await SendGroupMessageAsync(moduleMessage.GroupId.Value, result.EvolutionMessage);
                     }
                     else
                     {
@@ -495,7 +416,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
                     }
                 }
             }
-            else
+            else if (shouldDispatchToCommandModule)
             {
                 _logger.LogWarning("Message not handled or empty response");
             }
@@ -822,7 +743,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     /// <summary>
     /// 发送私聊消息（支持 &lt;img&gt; 标签自动解析为图片消息）
     /// </summary>
-    private async Task SendPrivateMessageAsync(long userId, string message)
+    public async Task SendPrivateMessageAsync(long userId, string message)
     {
         var segments = ParseMessageSegments(message);
         if (segments != null)
@@ -847,7 +768,7 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
     /// <summary>
     /// 发送群消息（支持 &lt;img&gt; 标签自动解析为图片消息）
     /// </summary>
-    private async Task SendGroupMessageAsync(long groupId, string message)
+    public async Task SendGroupMessageAsync(long groupId, string message)
     {
         var segments = ParseMessageSegments(message);
         if (segments != null)
@@ -1110,6 +1031,9 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         _isRunning = false;
         _reconnectCts.Cancel();
 
+        // Shutdown all modules
+        await _moduleManager.ShutdownAllAsync();
+
         if (_webSocket?.State == WebSocketState.Open)
         {
             await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Shutting down", cancellationToken);
@@ -1120,147 +1044,6 @@ public class BotService : BackgroundService, Core.Services.IImageUrlResolver
         _reconnectCts.Dispose();
 
         await base.StopAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// 检查并触发酒馆自主发言
-    /// </summary>
-    private async Task CheckTavernAutoSpeakAsync(long groupId)
-    {
-        try
-        {
-            // 检查酒馆状态
-            if (!_tavernService.IsEnabled || !_tavernService.HasCharacterLoaded())
-            {
-                return;
-            }
-
-            _logger.LogInformation("[BotService] 检查群 {GroupId} 自主发言条件", groupId);
-
-            // 获取监测状态
-            var status = _groupChatMonitor.GetGroupStatus(groupId);
-            _logger.LogInformation("[BotService] 群 {GroupId} 状态: 消息={Count}, 关键词={HasKeyword}, 冷却={Cooldown}", 
-                groupId, status.MessageCount, status.HasHighFreqKeyword, status.IsInCooldown);
-
-            if (!status.CanTrigger)
-            {
-                return;
-            }
-
-            _logger.LogInformation("[BotService] 群 {GroupId} 满足触发条件，开始生成回复", groupId);
-
-            // 检查是否启用自主发言
-            if (!_tavernConfigService.Config.AutoSpeak.Enabled)
-            {
-                _logger.LogInformation("[BotService] 自主发言已禁用");
-                return;
-            }
-
-            // 生成总结和回复
-            var summary = await _groupChatMonitor.GenerateSummaryAsync(groupId);
-            var keywords = string.Join(",", status.TopKeywords.Take(3).Select(kv => kv.Key));
-            var response = await _tavernService.GenerateSummaryResponseAsync(summary, keywords);
-
-            // 使用配置中的消息模板
-            var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
-            var messagePrefix = _tavernConfigService.Config.AutoSpeak.MessagePrefix;
-            var message = messagePrefix.Replace("{CharacterName}", characterName) + response;
-
-            _logger.LogInformation("[BotService] 群 {GroupId} 发送自主发言", groupId);
-            await SendGroupMessageAsync(groupId, message);
-            
-            // 记录触发时间，启动冷却
-            _groupChatMonitor.RecordTriggerTime(groupId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[BotService] 自主发言检查异常");
-        }
-    }
-
-    /// <summary>
-    /// 检查特别关注用户发言
-    /// </summary>
-    private async Task CheckSpecialFocusAsync(long groupId, string userId, string userName, string content, bool isAtBot)
-    {
-        try
-        {
-            var config = _tavernConfigService.Config.SpecialFocus;
-            
-            // 检查是否启用特别关注
-            if (!config.Enabled)
-            {
-                return;
-            }
-            
-            // 检查酒馆状态
-            if (!_tavernService.IsEnabled || !_tavernService.HasCharacterLoaded())
-            {
-                return;
-            }
-            
-            // 检查是否@Bot（如果配置要求）
-            if (config.RequireMention && !isAtBot)
-            {
-                return;
-            }
-            
-            // 检查用户是否在特别关注列表中
-            // 支持两种格式：纯QQ号 或 QQ号@groupId
-            var isFocused = config.UserIds.Any(id => 
-                id == userId || 
-                id == $"{userId}@g{groupId}" ||
-                id == $"{userId}@{groupId}");
-            
-            if (!isFocused)
-            {
-                return;
-            }
-            
-            _logger.LogInformation("[特别关注] 检测到关注用户发言: Group={GroupId}, User={User}, Content={Content}", 
-                groupId, userName, content.Length > 20 ? content[..20] + "..." : content);
-            
-            // 检查冷却时间
-            var cooldownKey = $"{groupId}:{userId}";
-            if (_specialFocusCooldown.TryGetValue(cooldownKey, out var lastTime))
-            {
-                var elapsed = DateTime.Now - lastTime;
-                var cooldown = TimeSpan.FromMinutes(config.CooldownMinutes);
-                if (elapsed < cooldown)
-                {
-                    var remaining = (int)(cooldown - elapsed).TotalSeconds;
-                    _logger.LogInformation("[特别关注] 用户 {User} 处于冷却期，剩余 {Remaining} 秒", userName, remaining);
-                    return;
-                }
-            }
-            
-            _logger.LogInformation("[特别关注] 为用户 {User} 生成回复", userName);
-            
-            // 构建提示词
-            var scenario = config.ScenarioTemplate
-                .Replace("{UserName}", userName)
-                .Replace("{Message}", content);
-            
-            // 调用AI生成回复
-            var characterName = _tavernService.CurrentCharacter?.Name ?? "角色";
-            var response = await _tavernService.GenerateResponseAsync(scenario, userName);
-            
-            // 构建消息
-            var messagePrefix = config.MessagePrefix
-                .Replace("{CharacterName}", characterName)
-                .Replace("{UserName}", userName);
-            var message = messagePrefix + response;
-            
-            _logger.LogInformation("[特别关注] 发送回复给 {User}", userName);
-            await SendGroupMessageAsync(groupId, message);
-            
-            // 记录冷却时间
-            _specialFocusCooldown[cooldownKey] = DateTime.Now;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[特别关注] 处理异常");
-        }
     }
 }
 
